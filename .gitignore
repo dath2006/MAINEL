@@ -1,0 +1,264 @@
+# ===========================
+# MAINEL Project .gitignore
+# ===========================
+
+# --------------------------
+# Python / Backend
+# --------------------------
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+.ENV/
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+pytest_cache/
+
+# Translations
+*.mo
+*.pot
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# dotenv
+.env
+.env.local
+.env.*.local
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# --------------------------
+# Node.js / Frontend
+# --------------------------
+
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Testing
+coverage/
+
+# Next.js
+.next/
+out/
+
+# Production build
+build/
+
+# Debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Vercel
+.vercel
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# --------------------------
+# IDE / Editors
+# --------------------------
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# JetBrains (PyCharm, WebStorm, etc.)
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+
+# --------------------------
+# Operating System
+# --------------------------
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+*~
+
+# --------------------------
+# ML / Model Files
+# --------------------------
+
+# Model weights (large files)
+*.pt
+*.pth
+*.onnx
+*.engine
+*.weights
+*.h5
+*.pb
+*.tflite
+
+# Keep the model_weights directory but ignore contents
+model_weights/*
+!model_weights/.gitkeep
+
+# Deep person ReID cloned repo
+deep-person-reid/
+
+# --------------------------
+# Logs & Temporary Files
+# --------------------------
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Debug files
+debug_*.jpg
+debug_*.png
+
+# --------------------------
+# Database
+# --------------------------
+
+# SQLite
+*.sqlite
+*.sqlite3
+*.db
+
+# PostgreSQL
+*.sql.gz
+
+# --------------------------
+# Uploads & User Data
+# --------------------------
+
+uploads/*
+!uploads/.gitkeep
+
+# --------------------------
+# Docker
+# --------------------------
+
+# Docker volumes data
+postgres_data/
+redis_data/
+
+# --------------------------
+# Miscellaneous
+# --------------------------
+
+# Secrets
+*.pem
+*.key
+secrets/
+
+# Archives
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# Backup files
+*.bak
+*.backup
+
+# Lock files (optional - uncomment if you don't want to track)
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml

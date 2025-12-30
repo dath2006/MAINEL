@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+      - redis
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://mcmt:mcmt_password@db:5432/mcmt_reid
+      - REDIS_URL=redis://redis:6379/0
+      - OSRM_URL=http://osrm:5000
+      - DEVICE=cuda
+      - DEBUG=false
+    volumes:
+      - ./model_weights:/app/model_weights
+      - ./logs:/app/logs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  db:
+    image: postgis/postgis:15-3.3
+    environment:
+      - POSTGRES_DB=mcmt_reid
+      - POSTGRES_USER=mcmt
+      - POSTGRES_PASSWORD=mcmt_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mcmt -d mcmt_reid"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # OSRM routing service (requires OSM map data)
+  # Uncomment and configure with your map data
+  # osrm:
+  #   image: osrm/osrm-backend
+  #   ports:
+  #     - "5000:5000"
+  #   volumes:
+  #     - ./osrm-data:/data
+  #   command: osrm-routed --algorithm mld /data/map.osrm
+
+volumes:
+  postgres_data:
+  redis_data:
