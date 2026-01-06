@@ -1,0 +1,73 @@
+# Virtual environment
+venv/
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+wheels/
+
+# Environment files (handled by docker-compose)
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Logs
+*.log
+logs/
+debug_*.log
+debug_*.jpg
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+Dockerfile.*
+docker-compose*.yml
+.dockerignore
+
+# Model weights (mounted as volume)
+model_weights/
+
+# Uploads (mounted as volume)
+uploads/
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Deep-person-reid (large repo, installed via pip)
+deep-person-reid/
+
+# Test files
+test_*.py
+tests/
+
+# Misc
+*.bak
+*.tmp

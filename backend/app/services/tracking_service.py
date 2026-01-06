@@ -128,6 +128,27 @@ class TrackingService:
         
         return active_tracks, new_features
     
+    def extract_from_image(self, image: np.ndarray) -> Optional[np.ndarray]:
+        """
+        Extract ReID features from a single image/crop.
+        
+        Args:
+            image: BGR image (H, W, C)
+        
+        Returns:
+            Feature vector (D,) or None if extraction fails
+        """
+        if image is None or image.size == 0:
+            return None
+            
+        extractor = self._get_extractor()
+        # extract_batch expects a list of images
+        features = extractor.extract_batch([image])
+        
+        if features is not None and len(features) > 0:
+            return features[0]
+        return None
+    
     async def _handle_track_events(
         self,
         state: CameraState,

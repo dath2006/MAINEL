@@ -20,6 +20,9 @@ class HealthResponse(BaseModel):
     version: str
     cuda_available: bool
     cuda_device: str | None
+    active_tracks: int = 0
+    cpu_usage: float = 0.0
+    memory_usage: float = 0.0
 
 
 class SystemInfo(BaseModel):
@@ -43,12 +46,22 @@ async def health_check():
     if cuda_available:
         cuda_device = torch.cuda.get_device_name(0)
     
+    # Get active tracks count
+    from app.services.tracking_service import get_tracking_service
+    tracking_service = get_tracking_service()
+    # Sum active tracks across all cameras
+    active_tracks = sum(
+        tracking_service.get_track_count(cam_id) 
+        for cam_id in tracking_service.camera_states
+    )
+    
     return HealthResponse(
         status="healthy",
         timestamp=datetime.utcnow(),
         version=settings.app_version,
         cuda_available=cuda_available,
         cuda_device=cuda_device,
+        active_tracks=active_tracks,
     )
 
 

@@ -11,9 +11,15 @@ from typing import AsyncGenerator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
+import sys
 
 from app.config import settings
 from app.api.v1 import router as api_v1_router
+
+# Configure loguru log level based on DEBUG setting
+logger.remove()  # Remove default handler
+log_level = "DEBUG" if settings.debug else "WARNING"
+logger.add(sys.stderr, level=log_level, format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}")
 
 
 @asynccontextmanager
@@ -50,6 +56,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     from app.workers.stream_processor import start_stream_processor
     start_stream_processor()
     logger.info("Stream processor started")
+
+    # Load persistent state
+    from app.services.stream_manager import get_stream_manager
+    try:
+        await get_stream_manager().load_initial_state()
+        logger.info("Restored sources from database")
+    except Exception as e:
+        logger.error(f"Failed to restore sources: {e}")
     
     yield
     

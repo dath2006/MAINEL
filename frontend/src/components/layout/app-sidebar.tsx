@@ -26,7 +26,7 @@ import {
 
 const navigation = [
   { name: 'Dashboard', href: '/', icon: LayoutDashboard },
-  { name: 'Cameras', href: '/cameras', icon: Camera },
+  // { name: 'Cameras', href: '/cameras', icon: Camera }, // Removed
   { name: 'Live Tracking', href: '/tracking', icon: Users },
   { name: 'Analytics', href: '/analytics', icon: BarChart3 },
   { name: 'Settings', href: '/settings', icon: Settings },

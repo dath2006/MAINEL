@@ -34,6 +34,8 @@ class AddSourceRequest(BaseModel):
     source_type: SourceTypeEnum
     source_path: str  # File path, camera index, or RTSP URL
     name: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
 
 class SourceResponse(BaseModel):
@@ -48,6 +50,8 @@ class SourceResponse(BaseModel):
     total_frames: int
     current_frame: int
     is_active: bool
+    latitude: Optional[float]
+    longitude: Optional[float]
 
 
 class PlaybackStatus(BaseModel):
@@ -90,11 +94,13 @@ async def add_source(request: AddSourceRequest):
     logger.info(f"Adding source: camera_id={request.camera_id}, type={request.source_type}, path={request.source_path}")
     
     try:
-        source = manager.add_source(
+        source = await manager.add_source(
             camera_id=request.camera_id,
             source_path=request.source_path,
             source_type=source_type_map[request.source_type],
             name=request.name or "",
+            latitude=request.latitude,
+            longitude=request.longitude,
         )
     except Exception as e:
         logger.error(f"Failed to add source: {e}")
@@ -115,6 +121,8 @@ async def add_source(request: AddSourceRequest):
         total_frames=source.total_frames,
         current_frame=source.current_frame,
         is_active=source.is_active,
+        latitude=source.latitude,
+        longitude=source.longitude,
     )
 
 
@@ -134,11 +142,13 @@ async def upload_video(
     
     # Add as source
     manager = get_stream_manager()
-    source = manager.add_source(
+    source = await manager.add_source(
         camera_id=camera_id,
         source_path=file_path,
         source_type=SourceType.VIDEO_FILE,
         name=name or file.filename,
+        latitude=0.0, # TODO: Add lat/lon to upload form if needed
+        longitude=0.0,
     )
     
     if source is None:
@@ -157,6 +167,8 @@ async def upload_video(
         total_frames=source.total_frames,
         current_frame=source.current_frame,
         is_active=source.is_active,
+        latitude=source.latitude,
+        longitude=source.longitude,
     )
 
 
@@ -177,6 +189,8 @@ async def list_sources():
             total_frames=s.total_frames,
             current_frame=s.current_frame,
             is_active=s.is_active,
+            latitude=s.latitude,
+            longitude=s.longitude,
         )
         for s in manager.sources
     ]
@@ -186,7 +200,7 @@ async def list_sources():
 async def remove_source(source_id: int):
     """Remove a source."""
     manager = get_stream_manager()
-    if not manager.remove_source(source_id):
+    if not await manager.remove_source(source_id):
         raise HTTPException(status_code=404, detail="Source not found")
     return {"success": True}
 

@@ -77,13 +77,6 @@ async def init_db():
     from sqlalchemy import text
     
     async with engine.begin() as conn:
-        # Create PostGIS extension if not exists
-        try:
-            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS postgis;"))
-            logger.info("PostGIS extension enabled")
-        except Exception as e:
-            logger.warning(f"PostGIS extension: {e}")
-        
         # Create all tables
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database tables initialized")

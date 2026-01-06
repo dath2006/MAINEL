@@ -7,8 +7,12 @@ Query and search for person tracks across cameras.
 from typing import List, Optional
 from datetime import datetime
 from uuid import UUID, uuid4
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, UploadFile, File
 from loguru import logger
+
+from app.services.reid_service import get_reid_service
+from app.api.v1.streams import SourceResponse
+from app.services.stream_manager import get_stream_manager
 
 from app.schemas.track import (
     TrackStatus,
@@ -23,8 +27,10 @@ from app.schemas.track import (
 router = APIRouter()
 
 # In-memory storage (replace with database in production)
-_global_tracks: dict[str, dict] = {}
-_tracklets: dict[str, dict] = {}
+from app.services.track_store import get_track_store
+
+router = APIRouter()
+
 
 
 @router.get("/active", response_model=List[GlobalTrackResponse])
@@ -38,7 +44,7 @@ async def get_active_tracks(
     Active tracks are identities currently being tracked in the system.
     """
     tracks = [
-        t for t in _global_tracks.values()
+        t for t in get_track_store().get_all_tracks()
         if t["status"] == TrackStatus.ACTIVE
     ]
     
@@ -54,10 +60,13 @@ async def get_track(track_id: UUID):
     """Get full trajectory history for a track."""
     track_id_str = str(track_id)
     
-    if track_id_str not in _global_tracks:
+    store = get_track_store()
+    track_data = store.get_track(track_id_str)
+    
+    if not track_data:
         raise HTTPException(status_code=404, detail=f"Track {track_id} not found")
     
-    track_data = _global_tracks[track_id_str].copy()
+    track_data = track_data.copy()
     
     # Get associated tracklets
     tracklet_ids = track_data.get("tracklet_ids", [])
@@ -79,7 +88,7 @@ async def search_tracks(query: TrackSearchQuery):
     
     Supports filtering by camera, time range, status, and duration.
     """
-    tracks = list(_global_tracks.values())
+    tracks = get_track_store().get_all_tracks()
     
     # Apply filters
     if query.camera_ids:
@@ -101,6 +110,83 @@ async def search_tracks(query: TrackSearchQuery):
     tracks = tracks[query.offset:query.offset + query.limit]
     
     return [GlobalTrackResponse(**t) for t in tracks]
+
+
+@router.post("/search/image")
+async def search_by_image(
+    file: UploadFile = File(...),
+    limit: int = 5,
+    threshold: float = 0.5
+):
+    """
+    Search for a person by image.
+    
+    Uploads an image, extracts features, and finds matching global tracks.
+    Returns matches with their tracking history and camera locations.
+    """
+    reid_service = get_reid_service()
+    stream_manager = get_stream_manager()
+    
+    try:
+        content = await file.read()
+        matches = reid_service.search_by_image(content, top_k=limit, threshold=threshold)
+        
+        # Enrich results with GlobalTrack info and Camera locations
+        results = []
+        for match in matches:
+             global_id = match["global_track_id"]
+             score = match["score"]
+             
+             store = get_track_store()
+             track_data = store.get_track(global_id)
+
+             if track_data:
+                 
+                 # Enrich camera sequence with locations
+                 camera_seq = track_data.get("camera_sequence", [])
+                 logger.info(f"Enriching track {global_id} with camera seq: {camera_seq}")
+                 with open("debug_tracks.log", "a") as f:
+                     f.write(f"Enriching track {global_id} with camera seq: {camera_seq}\n")
+                 
+                 path_points = []
+                 for cam_id in camera_seq:
+                     # Find source for this camera to get location
+                     found_source = False
+                     for source in stream_manager.sources:
+                         if source.camera_id == cam_id:
+                             path_points.append({
+                                 "camera_id": cam_id,
+                                 "latitude": source.latitude,
+                                 "longitude": source.longitude,
+                                 "name": source.name
+                             })
+                             found_source = True
+                             break
+                     if not found_source:
+                         logger.warning(f"No source found for camera_id {cam_id} in track {global_id}")
+
+                 if not path_points:
+                     logger.warning(f"No path points generated from sequence {camera_seq}")
+                     with open("debug_tracks.log", "a") as f:
+                         f.write(f"No path points generated from sequence {camera_seq}\n")
+                 else:
+                     logger.info(f"Generated {len(path_points)} path points")
+                     with open("debug_tracks.log", "a") as f:
+                         f.write(f"Generated {len(path_points)} path points: {path_points}\n")
+                 
+                 results.append({
+                     "track": GlobalTrackResponse(**track_data),
+                     "score": float(score),
+                     "path_points": path_points
+                 })
+                 
+        return results
+        
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Search error: {e}")
+        raise HTTPException(status_code=500, detail="Internal search error")
 
 
 @router.get("/{track_id}/interpolate")

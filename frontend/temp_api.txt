@@ -1,0 +1,252 @@
+/**
+ * API client for MCMT-ReID backend
+ */
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
+// Generic fetch wrapper
+async function fetchAPI<T>(
+  endpoint: string,
+  options?: RequestInit,
+  defaultValue?: T
+): Promise<T> {
+  const url = `${API_BASE}${endpoint}`;
+  
+  try {
+    const res = await fetch(url, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...options?.headers,
+      },
+    });
+
+    // Return default value on 404
+    if (res.status === 404 && defaultValue !== undefined) {
+      return defaultValue;
+    }
+
+    if (!res.ok) {
+      console.error(`API Error: ${res.status} ${res.statusText} for ${url}`);
+      if (defaultValue !== undefined) {
+        return defaultValue;
+      }
+      throw new Error(`API Error: ${res.status} ${res.statusText}`);
+    }
+
+    // Handle empty responses
+    const text = await res.text();
+    if (!text) {
+      return (defaultValue ?? {}) as T;
+    }
+
+    return JSON.parse(text) as T;
+  } catch (error) {
+    console.error(`Failed to fetch ${url}:`, error);
+    if (defaultValue !== undefined) {
+      return defaultValue;
+    }
+    throw error;
+  }
+}
+
+// Types
+export interface Camera {
+  id: number;
+  name: string;
+  latitude: number;
+  longitude: number;
+  fov_angle?: number;
+  stream_url?: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface Track {
+  id: string;
+  first_seen: string;
+  last_seen: string;
+  status: 'active' | 'lost' | 'finished';
+  camera_sequence: number[];
+  tracklet_count: number;
+}
+
+export interface SystemHealth {
+  status: string;
+  cuda_available: boolean;
+  device: string;
+  active_tracks?: number;
+  active_cameras?: number;
+}
+
+export interface Detection {
+  bbox: [number, number, number, number];
+  confidence: number;
+  track_id?: number;
+}
+
+// API functions
+export const api = {
+  // Health
+  health: () => fetchAPI<{ status: string }>('/api/v1/health/health', undefined, { status: 'unknown' }),
+  systemInfo: () => fetchAPI<SystemHealth>('/api/v1/health/info', undefined, {
+    status: 'unknown',
+    cuda_available: false,
+    device: 'unknown',
+    active_tracks: 0,
+    active_cameras: 0,
+  }),
+
+  // Cameras
+  cameras: {
+    list: () => fetchAPI<Camera[]>('/api/v1/cameras', undefined, []),
+    get: (id: number) => fetchAPI<Camera | null>(`/api/v1/cameras/${id}`, undefined, null),
+    create: (data: Partial<Camera>) =>
+      fetchAPI<Camera>('/api/v1/cameras', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    update: (id: number, data: Partial<Camera>) =>
+      fetchAPI<Camera>(`/api/v1/cameras/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
+    delete: (id: number) =>
+      fetchAPI<void>(`/api/v1/cameras/${id}`, { method: 'DELETE' }, undefined),
+    activate: (id: number) =>
+      fetchAPI<Camera>(`/api/v1/cameras/${id}/activate`, { method: 'POST' }),
+    deactivate: (id: number) =>
+      fetchAPI<Camera>(`/api/v1/cameras/${id}/deactivate`, { method: 'POST' }),
+  },
+
+  // Tracks
+  tracks: {
+    active: () => fetchAPI<Track[]>('/api/v1/tracks/active', undefined, []),
+    get: (id: string) => fetchAPI<Track | null>(`/api/v1/tracks/${id}`, undefined, null),
+    search: (params: { camera_ids?: number[]; status?: string }) =>
+      fetchAPI<Track[]>('/api/v1/tracks/search', {
+        method: 'POST',
+        body: JSON.stringify(params),
+      }, []),
+  },
+};
+
+// Stream types
+export interface StreamSource {
+  id: number;
+  camera_id: number;
+  name: string;
+  source_type: 'video_file' | 'webcam' | 'rtsp';
+  source_path: string;
+  fps: number;
+  width: number;
+  height: number;
+  total_frames: number;
+  current_frame: number;
+  is_active: boolean;
+}
+
+export interface PlaybackStatus {
+  state: 'stopped' | 'playing' | 'paused';
+  source_count: number;
+  target_fps: number;
+  queue_size: number;
+  sources: Array<{
+    id: number;
+    camera_id: number;
+    name: string;
+    active: boolean;
+    progress: number;
+  }>;
+}
+
+export interface AddSourceRequest {
+  camera_id: number;
+  source_type: 'video_file' | 'webcam' | 'rtsp';
+  source_path: string;
+  name?: string;
+}
+
+// Streams API
+export const streamsApi = {
+  getSources: () => 
+    fetchAPI<StreamSource[]>('/api/v1/streams/sources', undefined, []),
+  
+  addSource: (data: AddSourceRequest) =>
+    fetchAPI<StreamSource>('/api/v1/streams/sources', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  
+  removeSource: (id: number) =>
+    fetchAPI<void>(`/api/v1/streams/sources/${id}`, { method: 'DELETE' }, undefined),
+  
+  play: () => 
+    fetchAPI<{ state: string }>('/api/v1/streams/play', { method: 'POST' }),
+  
+  pause: () => 
+    fetchAPI<{ state: string }>('/api/v1/streams/pause', { method: 'POST' }),
+  
+  stop: () => 
+    fetchAPI<{ state: string }>('/api/v1/streams/stop', { method: 'POST' }),
+  
+  getStatus: () => 
+    fetchAPI<PlaybackStatus>('/api/v1/streams/status', undefined, {
+      state: 'stopped',
+      source_count: 0,
+      target_fps: 30,
+      queue_size: 0,
+      sources: [],
+    }),
+  
+  setFps: (fps: number) =>
+    fetchAPI<{ fps: number }>('/api/v1/streams/fps', {
+      method: 'POST',
+      body: JSON.stringify({ fps }),
+    }),
+};
+
+// WebSocket connection with auto-reconnect
+export function createTrackingSocket(
+  onMessage: (data: unknown) => void,
+  onError?: (error: Event) => void,
+  onOpen?: () => void,
+  onClose?: () => void
+): WebSocket | null {
+  const wsUrl = API_BASE.replace('http', 'ws') + '/api/v1/ws/tracks';
+  
+  try {
+    const ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+      console.log('WebSocket connected');
+      onOpen?.();
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        onMessage(data);
+      } catch {
+        // Ignore parse errors
+      }
+    };
+
+    ws.onerror = () => {
+      // Silently handle WebSocket errors - connection issues are expected
+      onError?.({} as Event);
+    };
+
+    ws.onclose = () => {
+      onClose?.();
+    };
+
+    return ws;
+  } catch {
+    // WebSocket creation failed - backend likely not available
+    console.log('WebSocket unavailable');
+    return null;
+  }
+}
+
+export default api;

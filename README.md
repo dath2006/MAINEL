@@ -2,8 +2,106 @@
 
 A real-time surveillance system that tracks individuals across multiple cameras using deep learning-based person re-identification. The system combines YOLOv8 detection, DeepSORT tracking, and OSNet feature extraction for seamless cross-camera tracking.
 
+
 ---
 
+- First Install docker and docker compose in your system, see any yt video for it if needed.
+- Install cuda-toolkit for GPU support using: https://developer.nvidia.com/cuda-12-1-0-download-archive
+- Clone this repository from github: git clone https://github.com/dath2006/MAINEL.git
+- Then for testing the system,you download the videos from:https://drive.google.com/file/d/1e3ZhyrqKd-E9KbJIixlGB_vnsZB-zNsd/view?usp=drive_link , https://drive.google.com/file/d/1dOoTA8qq7hZEdc4E4lXu4r-PQQWWzbL2/view?usp=drive_link , https://drive.google.com/file/d/1Rbj4jWvF00kxSu9Vv85WRQKrva5igPLm/view?usp=drive_link. and place them in the backend/app/videos folder. NOTE that you need to use the path as "app/videos/<video-name>" while adding in the frontend.
+Also take a pic of a person from the video, so that it can be used for searching the person. 
+- see this video: https://drive.google.com/file/d/14qRnaSkuR0EZ1vJIKzrFeGK2pu9BbgYn/view?usp=sharing
+
+## Docker Development (Recommended)
+
+The easiest way to set up the entire project is using Docker. This provides:
+- **Hot-reloading** for both backend and frontend
+- **Automatic package installation** when you modify `requirements.txt` or `package.json`
+- **No local dependency conflicts** - everything runs in isolated containers
+
+### Quick Start
+
+```bash
+# Clone and navigate to project
+cd MAINEL
+
+# Copy environment template
+copy .env.docker backend\.env
+
+# Start all services (CPU mode)
+docker compose up --build
+
+# OR for GPU/CUDA support (requires NVIDIA Container Toolkit)
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+```
+
+This will start:
+- **Frontend** at `http://localhost:2999`
+- **Backend API** at `http://localhost:7999`
+- **PostgreSQL** (PostGIS) at port `5431`
+- **Redis** at port `6378`
+
+### CPU vs GPU Mode
+
+Configure in `backend/.env`:
+```env
+# For CPU-only (default, works on all machines)
+DEVICE=cpu
+
+# For GPU acceleration (requires NVIDIA GPU + CUDA)
+DEVICE=cuda
+```
+
+When using `DEVICE=cuda`, also include the GPU compose file:
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+```
+
+### Installing New Python Packages
+
+```bash
+# Option 0: Add to requirements.txt and restart
+echo "new-package==0.0.0" >> backend/requirements.txt
+docker compose restart backend
+
+# Option 1: Install directly in running container
+docker compose exec backend pip install new-package
+```
+
+### Installing New npm Packages
+
+```bash
+# Install in running container
+docker compose exec frontend npm install new-package
+
+# The package.json will be updated automatically
+```
+
+### Useful Docker Commands
+
+```bash
+# View logs
+docker compose logs -f backend
+docker compose logs -f frontend
+
+# Rebuild a specific service
+docker compose up --build backend
+
+# Enter a container shell
+docker compose exec backend bash
+docker compose exec frontend sh
+
+# Stop all services
+docker compose down
+
+# Stop and remove all data (clean slate)
+docker compose down -v
+```
+
+## Docker Development END
+
+--- 
+## The following setup is to run the project without docker
 ## Table of Contents
 
 - [Prerequisites](#prerequisites)
@@ -16,6 +114,11 @@ A real-time surveillance system that tracks individuals across multiple cameras 
 - [Troubleshooting](#troubleshooting)
 
 ---
+
+
+
+---
+
 
 ## Prerequisites
 
@@ -234,40 +337,7 @@ npm run dev
 
 The frontend will be available at: `http://localhost:3000`
 
----
 
-## Docker Deployment (Alternative)
-
-For quick deployment using Docker:
-
-### Step 1: Navigate to Backend Directory
-
-```bash
-cd backend
-```
-
-### Step 2: Build and Run with Docker Compose
-
-```bash
-docker-compose up -d
-```
-
-This will start:
-- **API Server** on port `8000`
-- **PostgreSQL** (with PostGIS) on port `5432`
-- **Redis** on port `6379`
-
-### View Logs
-
-```bash
-docker-compose logs -f api
-```
-
-### Stop Services
-
-```bash
-docker-compose down
-```
 
 ---
 

@@ -1,0 +1,18 @@
+# ============================================
+# GPU Configuration Override
+# ============================================
+# Use this file for GPU-enabled development:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up
+#
+# Note: Requires NVIDIA Container Toolkit installed
+# https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
+
+services:
+  backend:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

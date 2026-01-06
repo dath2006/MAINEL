@@ -19,6 +19,7 @@ from loguru import logger
 from app.services.stream_manager import get_stream_manager, FrameData, PlaybackState
 from app.services.tracking_service import get_tracking_service
 from app.services.reid_service import get_reid_service
+from app.services.track_store import get_track_store
 from app.api.v1.realtime import broadcast_event
 
 
@@ -51,6 +52,10 @@ class StreamProcessor:
         self._fps = 0.0
         self._last_fps_time = time.time()
         self._fps_frame_count = 0
+        
+        # Sticky state for frame skipping
+        self._last_detections = []
+        self._last_tracks = []
         
         logger.info("StreamProcessor initialized")
     
@@ -150,6 +155,10 @@ class StreamProcessor:
                     frame_detections = frame_results.get("detections", [])
                     frame_tracks = frame_results.get("tracks", [])
                     
+                    # Update sticky state
+                    self._last_detections = frame_detections
+                    self._last_tracks = frame_tracks
+                    
                     # Broadcast events
                     self._broadcast_events(frame_data, frame_results)
                     
@@ -165,6 +174,10 @@ class StreamProcessor:
                         logger.debug(f"RuntimeError in ML processing {self.source_id}: {e}")
                 except Exception as e:
                     logger.debug(f"Frame processing error: {e}")
+            else:
+                # Reuse last known results for smoothness
+                frame_detections = self._last_detections
+                frame_tracks = self._last_tracks
             
             # Broadcast frame (with overlays if ML ran)
             if self.broadcast_frames:
@@ -254,6 +267,14 @@ class StreamProcessor:
                         track.global_id = str(match.global_track_id)
                         logger.info(f"ReID: Track {track.track_id} -> Global ID {track.global_id} (is_new={match.is_new}, sim={match.visual_similarity:.2f})")
                         
+                        # Update TrackStore
+                        track_store = get_track_store()
+                        # Don't pass camera_sequence here to avoid overwriting history
+                        track_store.add_or_update_track(track.global_id, {
+                             # metadata updates if any
+                        })
+                        track_store.update_camera_sequence(track.global_id, frame_data.camera_id)
+
                         # Capture thumbnail for new identities
                         if match.is_new:
                             try:

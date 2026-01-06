@@ -17,7 +17,6 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship, Mapped, mapped_column
-from geoalchemy2 import Geography
 
 from app.db.session import Base
 
@@ -40,11 +39,9 @@ class Camera(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     
-    # Geospatial location (PostGIS Point)
-    location = Column(
-        Geography(geometry_type='POINT', srid=4326),
-        nullable=False,
-    )
+    # Geospatial location (Simple Lat/Lon)
+    latitude: Mapped[float] = mapped_column(Float, default=0.0)
+    longitude: Mapped[float] = mapped_column(Float, default=0.0)
     
     # Optional zone grouping
     zone_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)

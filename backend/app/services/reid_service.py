@@ -260,6 +260,54 @@ class ReIDService:
         for tid in expired:
             del self._recent_tracklets[tid]
     
+    def search_by_image(
+        self,
+        image_bytes: bytes,
+        top_k: int = 5,
+        threshold: float = 0.6,
+    ) -> List[Dict]:
+        """
+        Search for a person in the gallery using an uploaded image.
+        """
+        import cv2
+        import numpy as np
+        
+        # Decode image
+        nparr = np.frombuffer(image_bytes, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if img is None:
+            raise ValueError("Invalid image data")
+            
+        # TODO: Run person detection/cropping if full image is uploaded?
+        # For now, assume the uploaded image is already a crop of a person.
+        # Resize to standard size expected by ReID model if needed, 
+        # but the encoder usually handles it.
+        
+        # Get embedding using TrackingService
+        from app.services.tracking_service import get_tracking_service
+        tracking_service = get_tracking_service()
+        
+        embedding = tracking_service.extract_from_image(img)
+        
+        if embedding is None:
+            raise ValueError("Failed to extract features from image")
+        
+        # Search gallery
+        matches = self.visual_matcher.match(embedding, top_k=top_k)
+        
+        results = []
+        for global_id, score, entry in matches:
+            logger.info(f"Search candidate: {global_id} score={score:.4f} threshold={threshold}")
+            if score >= threshold:
+                results.append({
+                    "global_track_id": global_id,
+                    "score": score,
+                    "last_seen": entry.last_seen,
+                    "camera_sequence": [entry.last_camera_id], # Simplified for now
+                })
+        
+        return results
+    
     def get_plausible_cameras(
         self,
         camera_id: int,

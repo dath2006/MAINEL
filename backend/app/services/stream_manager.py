@@ -16,6 +16,9 @@ from datetime import datetime
 import cv2
 import numpy as np
 from loguru import logger
+from sqlalchemy import select
+from app.db.session import get_db_context
+from app.db.models import Camera
 
 
 class SourceType(str, Enum):
@@ -41,6 +44,8 @@ class VideoSource:
     source_type: SourceType
     source_path: str  # File path, camera index as string, or URL
     name: str = ""
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     fps: float = 30.0
     width: int = 0
     height: int = 0
@@ -165,6 +170,31 @@ class StreamManager:
         self._on_frame_callbacks: List[Callable[[FrameData], None]] = []
         
         logger.info(f"StreamManager initialized (target_fps={target_fps})")
+        # Async loading must be called explicitly via load_initial_state()
+
+    async def load_initial_state(self):
+        """Load active cameras from database (Async)."""
+        logger.info("Loading initial state from DB...")
+        try:
+            async with get_db_context() as db:
+                result = await db.execute(select(Camera).where(Camera.is_active == True))
+                cameras = result.scalars().all()
+                
+                for cam in cameras:
+                    logger.info(f"Restoring camera {cam.id} from DB")
+                    # Use internal sync logic to restore state without re-saving to DB
+                    self._add_source_internal(
+                        camera_id=cam.id,
+                        source_path=cam.stream_url or "0",
+                        source_type=SourceType.WEBCAM if (cam.stream_url or "").isdigit() else SourceType.VIDEO_FILE,
+                        name=cam.name,
+                        latitude=cam.latitude,
+                        longitude=cam.longitude,
+                    )
+        except Exception as e:
+            logger.error(f"Failed to load sources from DB: {e}")
+
+
     
     @property
     def state(self) -> PlaybackState:
@@ -174,14 +204,37 @@ class StreamManager:
     def sources(self) -> List[VideoSource]:
         return list(self._sources.values())
     
-    def add_source(
+    async def add_source(
         self,
         camera_id: int,
         source_path: str,
         source_type: SourceType = SourceType.VIDEO_FILE,
         name: str = "",
+        latitude: Optional[float] = None,
+        longitude: Optional[float] = None,
     ) -> Optional[VideoSource]:
-        """Add a video source."""
+        """Add a video source (Async)."""
+        # Call internal sync logic to start threads
+        source = self._add_source_internal(
+            camera_id, source_path, source_type, name, latitude, longitude
+        )
+        
+        if source:
+             # Async DB Persist
+             await self._persist_source(camera_id, name, source_path, latitude, longitude)
+        
+        return source
+
+    def _add_source_internal(
+        self,
+        camera_id: int,
+        source_path: str,
+        source_type: SourceType,
+        name: str,
+        latitude: float,
+        longitude: float,
+    ) -> Optional[VideoSource]:
+        """Internal sync add source logic."""
         with self._lock:
             source = VideoSource(
                 id=self._next_source_id,
@@ -189,6 +242,8 @@ class StreamManager:
                 source_type=source_type,
                 source_path=source_path,
                 name=name or f"Source {self._next_source_id}",
+                latitude=latitude,
+                longitude=longitude,
             )
             
             if not source.open():
@@ -199,20 +254,60 @@ class StreamManager:
             
             logger.info(f"Added source {source.id} for camera {camera_id}: {source_path}")
             return source
+
+    async def _persist_source(self, camera_id: int, name: str, path: str, lat: float, lon: float):
+        """Save source to database (Async)."""
+        try:
+            async with get_db_context() as db:
+                result = await db.execute(select(Camera).where(Camera.id == camera_id))
+                cam = result.scalar_one_or_none()
+                
+                if not cam:
+                    cam = Camera(
+                        id=camera_id,
+                        name=name,
+                        stream_url=path,
+                        latitude=lat or 0.0,
+                        longitude=lon or 0.0,
+                        is_active=True
+                    )
+                    db.add(cam)
+                else:
+                    cam.is_active = True
+                    cam.stream_url = path
+                    cam.latitude = lat or 0.0
+                    cam.longitude = lon or 0.0
+                
+                await db.commit()
+        except Exception as e:
+            logger.error(f"DB Persist Error: {e}")
     
-    def remove_source(self, source_id: int) -> bool:
-        """Remove a video source."""
+    async def remove_source(self, source_id: int) -> bool:
+        """Remove a video source (Async)."""
         with self._lock:
             if source_id not in self._sources:
                 return False
             
-            # Stop the source thread if running
             source = self._sources[source_id]
+            
+            # Stop the source thread
             source.close()
             del self._sources[source_id]
             
             logger.info(f"Removed source {source_id}")
-            return True
+            
+        # Deactivate in DB
+        try:
+            async with get_db_context() as db:
+                result = await db.execute(select(Camera).where(Camera.id == source.camera_id))
+                cam = result.scalar_one_or_none()
+                if cam:
+                    cam.is_active = False
+                    await db.commit()
+        except Exception as e:
+            logger.error(f"DB Removal Error: {e}")
+
+        return True
     
     def get_source(self, source_id: int) -> Optional[VideoSource]:
         """Get source by ID."""
@@ -294,7 +389,7 @@ class StreamManager:
             source._capture.release()
             source._capture = None
         
-        # Open capture
+            # Open capture
         try:
             if source.source_type == SourceType.WEBCAM:
                 # Force DirectShow backend on Windows (cv2.CAP_DSHOW = 700)
@@ -304,7 +399,9 @@ class StreamManager:
                 source._capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
             else:
                 logger.debug(f"Opening video file {source.source_path}")
-                source._capture = cv2.VideoCapture(source.source_path)
+                # Try to use Hardware Acceleration if available
+                source._capture = cv2.VideoCapture(source.source_path, cv2.CAP_ANY)
+                source._capture.set(cv2.CAP_PROP_HW_ACCELERATION, cv2.VIDEO_ACCELERATION_ANY)
             
             if not source._capture.isOpened():
                 logger.error(f"Failed to open source {source.id}: {source.source_path}")
@@ -312,11 +409,18 @@ class StreamManager:
                 return
                 
             # Update source properties from the actual opened capture
-            # This ensures accurate FPS/Dimensions for the stream
             width = source._capture.get(cv2.CAP_PROP_FRAME_WIDTH)
             height = source._capture.get(cv2.CAP_PROP_FRAME_HEIGHT)
             fps = source._capture.get(cv2.CAP_PROP_FPS) or 30.0
             
+            # Smart Resize Target
+            PROCESSING_WIDTH = 1280
+            if width > PROCESSING_WIDTH:
+                scale = PROCESSING_WIDTH / width
+                width = PROCESSING_WIDTH
+                height = int(height * scale)
+                logger.info(f"Source {source.id} will be resized to {int(width)}x{int(height)}")
+
             if width > 0 and height > 0:
                 source.width = int(width)
                 source.height = int(height)
@@ -348,6 +452,10 @@ class StreamManager:
             # Read frame
             try:
                 ret, frame = source._capture.read()
+                if ret:
+                    # Smart Resize
+                    if frame.shape[1] > PROCESSING_WIDTH:
+                        frame = cv2.resize(frame, (source.width, source.height))
             except Exception as e:
                 # Catch OpenCV errors (including OOM) and generic errors
                 logger.warning(f"Error reading from source {source.id}: {e}")
@@ -449,6 +557,8 @@ class StreamManager:
                     "current_frame": s.current_frame,
                     "total_frames": s.total_frames,
                     "progress": s.current_frame / s.total_frames if s.total_frames > 0 else 0,
+                    "latitude": s.latitude,
+                    "longitude": s.longitude,
                 }
                 for s in self._sources.values()
             ],

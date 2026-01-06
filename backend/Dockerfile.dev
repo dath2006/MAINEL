@@ -1,0 +1,59 @@
+# ============================================
+# MCMT-ReID Backend - Development Dockerfile
+# ============================================
+# Optimized for hot-reload and dynamic package installation
+
+FROM python:3.11-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies (compatible with Debian Trixie)
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
+    libgomp1 \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install pip and development tools
+RUN pip install --upgrade pip setuptools wheel
+
+# Copy requirements and install Python dependencies
+# Uses PyTorch CUDA index for GPU support
+COPY requirements.txt .
+RUN pip install --no-cache-dir \
+    --extra-index-url https://download.pytorch.org/whl/cu121 \
+    -r requirements.txt
+
+# Install TorchReID for OSNet (requires numpy, use no-build-isolation)
+RUN pip install numpy cython && \
+    pip install --no-build-isolation git+https://github.com/KaiyangZhou/deep-person-reid.git
+
+# Install watchfiles for better hot-reloading
+RUN pip install watchfiles
+
+# Copy entrypoint script
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Create necessary directories
+RUN mkdir -p model_weights uploads logs
+
+# Set environment variables
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+
+# Expose port
+EXPOSE 8000
+
+# Use entrypoint for flexible startup
+ENTRYPOINT ["/entrypoint.sh"]
+
+# Default command - uvicorn with hot-reload
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/app"]

@@ -22,8 +22,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+
+
 parts/
 sdist/
 var/
@@ -151,66 +151,6 @@ next-env.d.ts
 /.emacs.desktop.lock
 *.elc
 
-# --------------------------
-# Operating System
-# --------------------------
-
-# macOS
-.DS_Store
-.AppleDouble
-.LSOverride
-._*
-.Spotlight-V100
-.Trashes
-
-# Windows
-Thumbs.db
-ehthumbs.db
-Desktop.ini
-$RECYCLE.BIN/
-*.lnk
-
-# Linux
-*~
-
-# --------------------------
-# ML / Model Files
-# --------------------------
-
-# Model weights (large files)
-*.pt
-*.pth
-*.onnx
-*.engine
-*.weights
-*.h5
-*.pb
-*.tflite
-
-# Keep the model_weights directory but ignore contents
-model_weights/*
-!model_weights/.gitkeep
-
-# Deep person ReID cloned repo
-deep-person-reid/
-
-# --------------------------
-# Logs & Temporary Files
-# --------------------------
-
-# Logs
-logs/
-*.log
-
-# Temporary files
-tmp/
-temp/
-*.tmp
-*.temp
-
-# Debug files
-debug_*.jpg
-debug_*.png
 
 # --------------------------
 # Database
@@ -262,3 +202,6 @@ secrets/
 # package-lock.json
 # yarn.lock
 # pnpm-lock.yaml
+
+#Videos:
+/backend/app/videos/*
