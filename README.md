@@ -77,6 +77,16 @@ docker compose exec frontend npm install new-package
 # The package.json will be updated automatically
 ```
 
+- See after running the docker, the frontend will be running at `http://localhost:3000` and the backend will be running at `http://localhost:8000`
+- And if you want to stop the docker, you can use the following command:
+```bash
+docker compose down or press ctrl + c in terminal
+```
+- Then again to start the docker, you can use the following command:
+```bash
+docker compose up
+```
+
 ### Useful Docker Commands
 
 ```bash
