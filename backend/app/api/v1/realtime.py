@@ -209,3 +209,29 @@ async def broadcast_track_lost(global_track_id: str, last_camera_id: int):
 async def broadcast_event(event: dict):
     """Broadcast any event to all clients."""
     await manager.broadcast(event)
+
+
+async def broadcast_track_path_update(
+    global_track_id: str,
+    camera_sequence: list,
+    path_points: list,
+    from_camera_id: int,
+    to_camera_id: int,
+):
+    """
+    Broadcast track path update for real-time map visualization.
+    
+    Called when a person moves from one camera to another.
+    """
+    await manager.broadcast({
+        "type": "track_path_update",
+        "data": {
+            "global_track_id": global_track_id,
+            "from_camera_id": from_camera_id,
+            "to_camera_id": to_camera_id,
+            "camera_sequence": camera_sequence,
+            "path_points": path_points,
+        },
+        "timestamp": datetime.utcnow().isoformat(),
+    })
+

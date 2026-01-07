@@ -273,32 +273,108 @@ class StreamProcessor:
                         track_store.add_or_update_track(track.global_id, {
                              # metadata updates if any
                         })
+                        
+                        # Check for camera transition and broadcast path update
+                        track_data = track_store.get_track(track.global_id)
+                        previous_sequence = track_data.get("camera_sequence", []) if track_data else []
+                        prev_camera = previous_sequence[-1] if previous_sequence else None
+                        
                         track_store.update_camera_sequence(track.global_id, frame_data.camera_id)
-
-                        # Capture thumbnail for new identities
-                        if match.is_new:
+                        
+                        # If camera changed, broadcast path update for map
+                        if prev_camera is not None and prev_camera != frame_data.camera_id:
+                            logger.info(f"Camera transition detected: {track.global_id} from {prev_camera} -> {frame_data.camera_id}")
+                            
+                            # Get updated track with full camera sequence
+                            updated_track = track_store.get_track(track.global_id)
+                            camera_seq = updated_track.get("camera_sequence", [])
+                            
+                            # Build path points from camera sequence
+                            stream_manager = get_stream_manager()
+                            path_points = []
+                            for cam_id in camera_seq:
+                                for source in stream_manager.sources:
+                                    if source.camera_id == cam_id:
+                                        path_points.append({
+                                            "camera_id": cam_id,
+                                            "latitude": source.latitude,
+                                            "longitude": source.longitude,
+                                            "name": source.name
+                                        })
+                                        break
+                            
+                            # Broadcast path update via WebSocket
                             try:
-                                import cv2
-                                import base64
+                                from app.api.v1.realtime import broadcast_track_path_update
+                                loop.create_task(
+                                    broadcast_track_path_update(
+                                        global_track_id=track.global_id,
+                                        camera_sequence=camera_seq,
+                                        path_points=path_points,
+                                        from_camera_id=prev_camera,
+                                        to_camera_id=frame_data.camera_id,
+                                    )
+                                )
+                            except Exception as ws_err:
+                                logger.warning(f"Failed to broadcast path update: {ws_err}")
+
+                        # Capture thumbnail with quality scoring (update if better quality)
+                        try:
+                            import cv2
+                            import base64
+                            from app.core.features.face_extractor import get_face_extractor, get_quality_scorer
+                            
+                            bbox = track.to_tlbr()  # [x1, y1, x2, y2]
+                            x1, y1, x2, y2 = map(int, bbox)
+                            
+                            # Clamp to frame bounds
+                            h, w = frame_data.frame.shape[:2]
+                            x1, y1 = max(0, x1), max(0, y1)
+                            x2, y2 = min(w, x2), min(h, y2)
+                            
+                            if x2 > x1 and y2 > y1:
+                                crop = frame_data.frame[y1:y2, x1:x2]
                                 
-                                bbox = track.to_tlbr()  # [x1, y1, x2, y2]
-                                x1, y1, x2, y2 = map(int, bbox)
+                                # Detect face in crop for quality scoring
+                                face_extractor = get_face_extractor()
+                                face_bbox = None
+                                face_conf = 0.0
+                                face_emb = None
+                                try:
+                                    face_emb, face_bbox, face_conf = face_extractor.extract_from_person_crop(crop)
+                                    
+                                    # Store face bbox in track for visualization
+                                    if face_bbox is not None:
+                                        # Convert face bbox from crop coords to frame coords
+                                        fx1, fy1, fx2, fy2 = face_bbox
+                                        track.face_bbox = (
+                                            x1 + fx1, y1 + fy1,
+                                            x1 + fx2, y1 + fy2
+                                        )
+                                        track.face_confidence = face_conf
+                                    
+                                    # Store face embedding to face_gallery for face-based search
+                                    if face_emb is not None and face_conf > 0.5:
+                                        reid_service.visual_matcher.add_face_embedding(track.global_id, face_emb)
+                                except Exception as face_err:
+                                    logger.debug(f"Face detection error: {face_err}")
                                 
-                                # Clamp to frame bounds
-                                h, w = frame_data.frame.shape[:2]
-                                x1, y1 = max(0, x1), max(0, y1)
-                                x2, y2 = min(w, x2), min(h, y2)
+                                # Calculate quality score
+                                quality_scorer = get_quality_scorer()
+                                quality = quality_scorer.score(crop, face_bbox, face_conf)
                                 
-                                if x2 > x1 and y2 > y1:
-                                    crop = frame_data.frame[y1:y2, x1:x2]
-                                    # Resize to thumbnail size
-                                    thumb = cv2.resize(crop, (64, 128))
-                                    _, buffer = cv2.imencode('.jpg', thumb, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                                    thumb_b64 = base64.b64encode(buffer).decode('utf-8')
-                                    reid_service.set_thumbnail(track.global_id, thumb_b64)
-                                    logger.info(f"Captured thumbnail for {track.global_id}")
-                            except Exception as thumb_err:
-                                logger.warning(f"Failed to capture thumbnail: {thumb_err}")
+                                # Resize to thumbnail size
+                                thumb = cv2.resize(crop, (64, 128))
+                                _, buffer = cv2.imencode('.jpg', thumb, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                                thumb_b64 = base64.b64encode(buffer).decode('utf-8')
+                                
+                                # Update thumbnail if quality is better
+                                reid_service.set_thumbnail(track.global_id, thumb_b64, quality)
+                                
+                                if match.is_new:
+                                    logger.info(f"Captured initial thumbnail for {track.global_id} (quality={quality:.2f})")
+                        except Exception as thumb_err:
+                            logger.warning(f"Failed to capture thumbnail: {thumb_err}")
                         
                         results["reid_matches"].append({
                             "local_track_id": track.track_id,
@@ -319,10 +395,16 @@ class StreamProcessor:
                      continue
 
                 bbox = track.to_tlbr()
+                # Get face_bbox and convert to serializable format
+                face_bbox = getattr(track, 'face_bbox', None)
+                if face_bbox is not None:
+                    face_bbox = [int(x) for x in face_bbox]  # Convert numpy int64 to Python int
+                
                 results["tracks"].append({
                     "track_id": track.track_id,
                     "global_id": getattr(track, 'global_id', None), # Include Global ID
                     "bbox": bbox.tolist(),
+                    "face_bbox": face_bbox,  # Face bbox for visualization
                     "confidence": conf,
                     "class_name": getattr(track, 'class_name', 'unknown'),
                     "state": track.state.name,
@@ -349,10 +431,21 @@ class StreamProcessor:
                 x1, y1, x2, y2 = map(int, bbox)
                 track_id = track["track_id"]
                 
-                # Draw bounding box
+                # Draw person bounding box (green)
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                 
-                # Draw label
+                # Draw face bounding box if detected (thin cyan)
+                face_bbox = track.get("face_bbox")
+                if face_bbox:
+                    fx1, fy1, fx2, fy2 = map(int, face_bbox)
+                    cv2.rectangle(frame, (fx1, fy1), (fx2, fy2), (255, 255, 0), 1)
+                    # Optional: add small "face" label
+                    cv2.putText(
+                        frame, "face", (fx1, fy1 - 3),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 0), 1
+                    )
+                
+                # Draw label with ID
                 label = f"ID: {track_id}"
                 cv2.putText(
                     frame, label, (x1, y1 - 10),

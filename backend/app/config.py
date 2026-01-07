@@ -68,7 +68,7 @@ class Settings(BaseSettings):
         description="Dimension of ReID feature embeddings"
     )
     reid_match_threshold: float = Field(
-        default=0.4,
+        default=0.3,  # Lowered from 0.4 for better cross-camera matching
         ge=0.0,
         le=1.0,
         description="Cosine similarity threshold for ReID matching (lower = more lenient)"
@@ -104,6 +104,54 @@ class Settings(BaseSettings):
     device: str = Field(
         default="cuda",
         description="Compute device: 'cuda' or 'cpu'"
+    )
+    
+    # ONNX Runtime Settings
+    use_onnx: bool = Field(
+        default=True,
+        description="Use ONNX Runtime for inference (faster on supported GPUs)"
+    )
+    yolo_onnx_path: Optional[str] = Field(
+        default="model_weights/yolov8n.onnx",
+        description="Path to ONNX YOLO model (exported from .pt)"
+    )
+    osnet_onnx_path: Optional[str] = Field(
+        default="model_weights/osnet_x1_0.onnx",
+        description="Path to ONNX OSNet model"
+    )
+    onnx_gpu_mem_limit: int = Field(
+        default=4,
+        description="GPU memory limit for ONNX Runtime in GB"
+    )
+    
+    # Face ReID Settings (Multi-Modal)
+    use_face_reid: bool = Field(
+        default=True,
+        description="Enable face+body multi-modal ReID matching"
+    )
+    face_weight: float = Field(
+        default=0.4,
+        ge=0.0,
+        le=1.0,
+        description="Weight for face embedding in fusion (body_weight = 1 - face_weight)"
+    )
+    body_weight: float = Field(
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        description="Weight for body embedding in fusion"
+    )
+    min_thumbnail_quality: float = Field(
+        default=0.3,
+        ge=0.0,
+        le=1.0,
+        description="Minimum quality score to save/update thumbnail"
+    )
+    search_threshold: float = Field(
+        default=0.4,
+        ge=0.0,
+        le=1.0,
+        description="Similarity threshold for image search (lower = more results)"
     )
     
     class Config:

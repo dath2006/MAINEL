@@ -74,6 +74,8 @@ class ReIDService:
         
         # Person thumbnails for gallery display (global_id -> base64 image)
         self.person_thumbnails: Dict[str, str] = {}
+        # Quality scores for thumbnails (to update only if better quality)
+        self.thumbnail_quality: Dict[str, float] = {}
         
         logger.info(f"ReIDService initialized (threshold={self.match_threshold})")
     
@@ -264,10 +266,15 @@ class ReIDService:
         self,
         image_bytes: bytes,
         top_k: int = 5,
-        threshold: float = 0.6,
+        threshold: float = None,  # Will use self.match_threshold if None
     ) -> List[Dict]:
         """
         Search for a person in the gallery using an uploaded image.
+        
+        Supports:
+        - Full body crops (uses body + face embeddings)
+        - Face-only images (uses face embeddings)
+        - Full scene images (runs person detection first)
         """
         import cv2
         import numpy as np
@@ -277,33 +284,112 @@ class ReIDService:
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         if img is None:
             raise ValueError("Invalid image data")
-            
-        # TODO: Run person detection/cropping if full image is uploaded?
-        # For now, assume the uploaded image is already a crop of a person.
-        # Resize to standard size expected by ReID model if needed, 
-        # but the encoder usually handles it.
         
-        # Get embedding using TrackingService
+        # Check if this is a full scene image (larger than typical crop)
+        # If so, run YOLO to detect persons
+        h, w = img.shape[:2]
+        is_full_scene = (h > 300 and w > 300) and (h / w < 0.6 or h / w > 1.7 or min(h, w) > 400)
+        
+        person_crops = []
+        if is_full_scene:
+            try:
+                from app.services.tracking_service import get_tracking_service
+                tracking_service = get_tracking_service()
+                detector = tracking_service._get_detector()
+                detections = detector.detect(img)
+                
+                if len(detections) > 0:
+                    logger.info(f"Detected {len(detections)} person(s) in uploaded image")
+                    # Crop each detected person
+                    for det in detections:
+                        x1, y1, x2, y2 = map(int, det.bbox)
+                        x1, y1 = max(0, x1), max(0, y1)
+                        x2, y2 = min(w, x2), min(h, y2)
+                        if x2 > x1 and y2 > y1:
+                            crop = img[y1:y2, x1:x2]
+                            person_crops.append(crop)
+            except Exception as det_err:
+                logger.warning(f"Person detection failed, treating as single crop: {det_err}")
+        
+        # If no detections (or single person image), use the whole image
+        if not person_crops:
+            person_crops = [img]
+        
+        # Try to extract face embedding first
+        face_embedding = None
+        try:
+            from app.core.features.face_extractor import get_face_extractor
+            face_extractor = get_face_extractor()
+            face_embedding, _, face_conf = face_extractor.extract_from_person_crop(person_crops[0])
+            if face_embedding is not None:
+                logger.info(f"Face detected in search image (confidence={face_conf:.2f})")
+        except Exception as e:
+            logger.debug(f"Face extraction failed: {e}")
+        
+        # Extract body embedding
         from app.services.tracking_service import get_tracking_service
         tracking_service = get_tracking_service()
+        body_embedding = tracking_service.extract_from_image(person_crops[0])
         
-        embedding = tracking_service.extract_from_image(img)
+        # Determine which embedding(s) to use and search method
+        all_matches = []
         
-        if embedding is None:
-            raise ValueError("Failed to extract features from image")
-        
-        # Search gallery
-        matches = self.visual_matcher.match(embedding, top_k=top_k)
+        if face_embedding is not None and body_embedding is not None:
+            # Fuse face + body embeddings
+            from app.core.features.face_extractor import create_fused_embedding
+            from app.config import settings
+            embedding = create_fused_embedding(
+                body_embedding, face_embedding,
+                face_weight=settings.face_weight,
+                body_weight=settings.body_weight,
+            )
+            logger.info("Using fused face+body embedding for search")
+            # Search main gallery
+            all_matches = self.visual_matcher.match(embedding, top_k=top_k)
+            
+        elif face_embedding is not None:
+            # Face-only image - search BOTH face gallery and main gallery
+            logger.info("Using face-only embedding for search (checking face gallery)")
+            
+            # 1. Search face gallery first (best for face-only matches)
+            face_matches = self.visual_matcher.match_face(face_embedding, top_k=top_k, threshold=threshold)
+            for gid, score, entry in face_matches:
+                all_matches.append((gid, score, entry))
+            
+            # 2. Also search main gallery (fused embeddings) with lower weight
+            main_matches = self.visual_matcher.match(face_embedding, top_k=top_k)
+            for gid, score, entry in main_matches:
+                # Avoid duplicates, boost if already found in face gallery
+                existing = next((m for m in all_matches if m[0] == gid), None)
+                if existing:
+                    # Already in face matches, keep higher score
+                    pass
+                else:
+                    all_matches.append((gid, score * 0.8, entry))  # Discount main gallery matches
+            
+            # Re-sort by score
+            all_matches.sort(key=lambda x: x[1], reverse=True)
+            all_matches = all_matches[:top_k]
+            
+        elif body_embedding is not None:
+            # Body-only - use body embedding
+            embedding = body_embedding
+            logger.info("Using body-only embedding for search")
+            all_matches = self.visual_matcher.match(embedding, top_k=top_k)
+        else:
+            raise ValueError("Failed to extract any features from image")
         
         results = []
-        for global_id, score, entry in matches:
+        for item in all_matches:
+            global_id, score = item[0], item[1]
+            entry = item[2] if len(item) > 2 else None
             logger.info(f"Search candidate: {global_id} score={score:.4f} threshold={threshold}")
             if score >= threshold:
                 results.append({
                     "global_track_id": global_id,
                     "score": score,
                     "last_seen": entry.last_seen,
-                    "camera_sequence": [entry.last_camera_id], # Simplified for now
+                    "camera_sequence": entry.camera_history if entry.camera_history else [entry.last_camera_id],
                 })
         
         return results
@@ -320,9 +406,23 @@ class ReIDService:
         """Get number of identities in gallery."""
         return self.visual_matcher.gallery_size
     
-    def set_thumbnail(self, global_id: str, thumbnail_base64: str):
-        """Store a thumbnail for a person."""
-        self.person_thumbnails[global_id] = thumbnail_base64
+    def set_thumbnail(self, global_id: str, thumbnail_base64: str, quality: float = 0.0):
+        """
+        Store a thumbnail for a person.
+        
+        Only updates if the new thumbnail has better quality than the existing one.
+        
+        Args:
+            global_id: Global track ID
+            thumbnail_base64: Base64 encoded thumbnail image
+            quality: Quality score (0.0 - 1.0), higher is better
+        """
+        current_quality = self.thumbnail_quality.get(global_id, -1.0)
+        
+        if quality > current_quality:
+            self.person_thumbnails[global_id] = thumbnail_base64
+            self.thumbnail_quality[global_id] = quality
+            logger.debug(f"Updated thumbnail for {global_id[:8]} (quality: {current_quality:.2f} -> {quality:.2f})")
     
     def get_gallery(self) -> List[Dict]:
         """Get all gallery entries with thumbnails."""

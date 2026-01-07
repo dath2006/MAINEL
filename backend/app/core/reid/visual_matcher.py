@@ -21,6 +21,7 @@ class GalleryEntry:
     last_seen: datetime
     appearance_count: int = 1
     embeddings_history: List[np.ndarray] = field(default_factory=list)
+    camera_history: List[int] = field(default_factory=list)  # All cameras where seen
 
 
 class VisualMatcher:
@@ -33,7 +34,7 @@ class VisualMatcher:
     
     def __init__(
         self,
-        match_threshold: float = 0.6,
+        match_threshold: float = 0.3,
         max_gallery_size: int = 1000,
         embedding_history_size: int = 10,
     ):
@@ -49,8 +50,11 @@ class VisualMatcher:
         self.max_gallery_size = max_gallery_size
         self.embedding_history_size = embedding_history_size
         
-        # Gallery: global_id -> GalleryEntry
+        # Gallery: global_id -> GalleryEntry (fused/body embeddings)
         self.gallery: Dict[str, GalleryEntry] = {}
+        
+        # Face-only gallery: global_id -> face_embedding (for face-based search)
+        self.face_gallery: Dict[str, np.ndarray] = {}
         
         logger.info(f"VisualMatcher initialized (threshold={match_threshold})")
     
@@ -93,6 +97,10 @@ class VisualMatcher:
             entry.last_camera_id = camera_id
             entry.last_seen = timestamp
             entry.appearance_count += 1
+            
+            # Track camera history (avoid duplicates in sequence)
+            if not entry.camera_history or entry.camera_history[-1] != camera_id:
+                entry.camera_history.append(camera_id)
         else:
             # Check gallery size limit
             if len(self.gallery) >= self.max_gallery_size:
@@ -104,6 +112,7 @@ class VisualMatcher:
                 last_camera_id=camera_id,
                 last_seen=timestamp,
                 embeddings_history=[embedding.copy()],
+                camera_history=[camera_id],
             )
         
         logger.debug(f"Gallery updated: {global_id} (size={len(self.gallery)})")
@@ -151,7 +160,7 @@ class VisualMatcher:
                 continue
             
             similarity = float(np.dot(query_embedding, entry.embedding))
-            logger.debug(f"Match check: {global_id[:8]} similarity={similarity:.3f} threshold={self.match_threshold}")
+            logger.info(f"Match check: {global_id[:8]} from cam={entry.last_camera_id} similarity={similarity:.3f} threshold={self.match_threshold}")
             results.append((global_id, similarity, entry))
         
         # Sort by similarity (descending)
@@ -194,11 +203,58 @@ class VisualMatcher:
         if global_id in self.gallery:
             del self.gallery[global_id]
             logger.debug(f"Removed from gallery: {global_id}")
+        if global_id in self.face_gallery:
+            del self.face_gallery[global_id]
     
     def clear_gallery(self):
         """Clear all gallery entries."""
         self.gallery.clear()
+        self.face_gallery.clear()
         logger.info("Gallery cleared")
+    
+    def add_face_embedding(self, global_id: str, face_embedding: np.ndarray):
+        """
+        Add or update face embedding for a person.
+        
+        Used for face-only search matching.
+        """
+        # Normalize
+        norm = np.linalg.norm(face_embedding)
+        if norm > 0:
+            face_embedding = face_embedding / norm
+        self.face_gallery[global_id] = face_embedding.copy()
+    
+    def match_face(
+        self,
+        face_embedding: np.ndarray,
+        top_k: int = 5,
+        threshold: Optional[float] = None,
+    ) -> List[Tuple[str, float, Optional[GalleryEntry]]]:
+        """
+        Match a face embedding against face gallery.
+        
+        Returns matches with gallery entry if exists.
+        """
+        if len(self.face_gallery) == 0:
+            return []
+        
+        threshold = threshold or self.match_threshold
+        
+        # Normalize query
+        norm = np.linalg.norm(face_embedding)
+        if norm > 0:
+            face_embedding = face_embedding / norm
+        
+        results = []
+        for global_id, stored_face in self.face_gallery.items():
+            similarity = float(np.dot(face_embedding, stored_face))
+            entry = self.gallery.get(global_id)
+            results.append((global_id, similarity, entry))
+        
+        # Sort and filter
+        results.sort(key=lambda x: x[1], reverse=True)
+        results = [r for r in results if r[1] >= threshold]
+        return results[:top_k]
     
     @property
     def gallery_size(self) -> int:
