@@ -33,7 +33,7 @@ class VisualMatcher:
     
     def __init__(
         self,
-        match_threshold: float = 0.6,
+        match_threshold: float = 0.55,  # Lowered from 0.6 to reduce duplicate IDs
         max_gallery_size: int = 1000,
         embedding_history_size: int = 10,
     ):

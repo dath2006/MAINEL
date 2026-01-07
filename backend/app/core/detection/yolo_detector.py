@@ -73,6 +73,7 @@ class YOLODetector:
     YOLOv8 based person detector.
     
     Uses ultralytics YOLOv8 for fast and accurate person detection.
+    Supports TensorRT engine for optimized GPU inference.
     Only detects class 0 (person) from the COCO dataset.
     
     Attributes:
@@ -80,25 +81,37 @@ class YOLODetector:
         confidence: Detection confidence threshold
         iou_threshold: Non-max suppression IoU threshold
         device: Compute device ('cuda' or 'cpu')
+        model_type: 'tensorrt', 'onnx', or 'pytorch'
     """
     
     PERSON_CLASS_ID = 0  # COCO person class
     
+    # Model file search order (TensorRT > ONNX > PyTorch)
+    MODEL_VARIANTS = {
+        "yolov8n": ["yolov8n.engine", "yolov8n.onnx", "yolov8n.pt"],
+        "yolov8s": ["yolov8s.engine", "yolov8s.onnx", "yolov8s.pt"],
+        "yolov8m": ["yolov8m.engine", "yolov8m.onnx", "yolov8m.pt"],
+    }
+    
     def __init__(
         self,
-        model_path: str = "yolov8n.pt",
+        model_path: Optional[str] = None,
         confidence: float = 0.5,
         iou_threshold: float = 0.45,
         device: Optional[str] = None,
+        use_tensorrt: bool = True,
+        model_dir: str = "model_weights",
     ):
         """
-        Initialize YOLOv8 detector.
+        Initialize YOLOv8 detector with auto model selection.
         
         Args:
-            model_path: Path to YOLOv8 weights file or model name
+            model_path: Path to model file. If None, auto-detects best available.
             confidence: Detection confidence threshold (0-1)
             iou_threshold: NMS IoU threshold (0-1)
             device: Compute device ('cuda', 'cpu', or None for auto)
+            use_tensorrt: Enable TensorRT/ONNX acceleration if available
+            model_dir: Directory to search for model files
         """
         if YOLO is None:
             raise ImportError("ultralytics package is required for YOLOv8 detector")
@@ -112,14 +125,58 @@ class YOLODetector:
         else:
             self.device = device
         
+        # Auto-detect best model format
+        if model_path is None:
+            model_path = self._find_best_model(model_dir, use_tensorrt)
+        
+        # Determine model type for logging
+        self.model_type = self._get_model_type(model_path)
+        
         logger.info(f"Loading YOLOv8 model from {model_path} on {self.device}")
+        logger.info(f"Model type: {self.model_type.upper()}")
+        
         self.model = YOLO(model_path)
-        self.model.to(self.device)
+        
+        # Only move to device for PyTorch models (TensorRT/ONNX handle their own device)
+        if self.model_type == "pytorch":
+            self.model.to(self.device)
         
         # Warm up the model
         self._warmup()
         
-        logger.info(f"YOLOv8 detector initialized (confidence={confidence}, iou={iou_threshold})")
+        logger.info(f"YOLOv8 detector initialized (type={self.model_type}, confidence={confidence}, iou={iou_threshold})")
+    
+    def _find_best_model(self, model_dir: str, use_tensorrt: bool) -> str:
+        """Find the best available model format."""
+        from pathlib import Path
+        
+        model_dir = Path(model_dir)
+        
+        # Search order based on use_tensorrt flag
+        if use_tensorrt and self.device == "cuda":
+            search_order = ["yolov8n.engine", "yolov8n.onnx", "yolov8n.pt"]
+        else:
+            search_order = ["yolov8n.pt"]
+        
+        for filename in search_order:
+            model_path = model_dir / filename
+            if model_path.exists():
+                logger.info(f"Found optimized model: {model_path}")
+                return str(model_path)
+        
+        # Fallback: download default PyTorch model
+        logger.info("No optimized model found, using default yolov8n.pt (will download if needed)")
+        return "yolov8n.pt"
+    
+    def _get_model_type(self, model_path: str) -> str:
+        """Determine model type from file extension."""
+        model_path = str(model_path).lower()
+        if model_path.endswith(".engine"):
+            return "tensorrt"
+        elif model_path.endswith(".onnx"):
+            return "onnx"
+        else:
+            return "pytorch"
     
     def _warmup(self):
         """Warm up the model with a dummy inference."""
@@ -132,6 +189,7 @@ class YOLODetector:
             classes=[self.PERSON_CLASS_ID],
         )
         logger.debug("Model warmup complete")
+
     
     def detect(
         self,
@@ -161,10 +219,29 @@ class YOLODetector:
         detections = []
         if len(results) > 0 and results[0].boxes is not None:
             boxes = results[0].boxes
+            frame_h, frame_w = frame.shape[:2]
+            
             for i in range(len(boxes)):
                 x1, y1, x2, y2 = boxes.xyxy[i].cpu().numpy()
                 conf_score = float(boxes.conf[i].cpu().numpy())
                 class_id = int(boxes.cls[i].cpu().numpy())
+                
+                # Filter by minimum size (at least 1% of frame area)
+                box_w = x2 - x1
+                box_h = y2 - y1
+                box_area = box_w * box_h
+                frame_area = frame_w * frame_h
+                
+                if box_area < frame_area * 0.005:  # Min 0.5% of frame
+                    continue
+                
+                # Filter by aspect ratio (persons are taller than wide)
+                # Typical person aspect ratio: 0.3 to 0.8 (width/height)
+                aspect_ratio = box_w / box_h if box_h > 0 else 999
+                if aspect_ratio > 1.2:  # Too wide (likely shadow or ground)
+                    continue
+                if aspect_ratio < 0.1:  # Too thin (likely edge noise)
+                    continue
                 
                 detections.append(Detection(
                     bbox=(float(x1), float(y1), float(x2), float(y2)),

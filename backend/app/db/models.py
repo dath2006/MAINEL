@@ -165,6 +165,11 @@ class GlobalTrack(Base):
         ARRAY(Float), nullable=True
     )
     
+    # Thumbnail image for gallery display (base64-encoded JPEG)
+    thumbnail_base64: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
+    
     # Metadata (renamed to avoid SQLAlchemy reserved name)
     track_metadata: Mapped[Optional[dict]] = mapped_column(JSONB, default={})
     

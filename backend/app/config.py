@@ -47,7 +47,7 @@ class Settings(BaseSettings):
         description="Path to YOLOv8 model weights"
     )
     yolo_confidence: float = Field(
-        default=0.5,
+        default=0.7,  # Higher threshold reduces false positives (shadows, ground patterns)
         ge=0.0,
         le=1.0,
         description="YOLO detection confidence threshold"
@@ -64,14 +64,14 @@ class Settings(BaseSettings):
         description="Path to OSNet model weights (None for auto-download)"
     )
     reid_embedding_dim: int = Field(
-        default=512,
+        default=1024,
         description="Dimension of ReID feature embeddings"
     )
     reid_match_threshold: float = Field(
-        default=0.4,
+        default=0.5,  # Raised from 0.4 to reduce duplicate gallery entries
         ge=0.0,
         le=1.0,
-        description="Cosine similarity threshold for ReID matching (lower = more lenient)"
+        description="Cosine similarity threshold for ReID matching (higher = more lenient)"
     )
     
     # Tracking
@@ -110,6 +110,7 @@ class Settings(BaseSettings):
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = False
+        extra = "ignore"
 
 
 @lru_cache()

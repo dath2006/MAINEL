@@ -63,6 +63,14 @@ class VideoSource:
                     # CAP_DSHOW is often faster/safer on Windows for webcams
                     self._capture = cv2.VideoCapture(int(self.source_path), cv2.CAP_DSHOW)
                 else:
+                    # Debug: Check file existence
+                    import os
+                    if isinstance(self.source_path, str) and not self.source_path.startswith(('rtsp://', 'http://', 'https://')):
+                        if not os.path.exists(self.source_path):
+                             logger.error(f"FILE NOT FOUND: {self.source_path} - Check path spelling or permissions.")
+                        else:
+                             logger.info(f"File found: {self.source_path}, Size: {os.path.getsize(self.source_path)}")
+                    
                     self._capture = cv2.VideoCapture(self.source_path)
                 
                 if self._capture.isOpened():

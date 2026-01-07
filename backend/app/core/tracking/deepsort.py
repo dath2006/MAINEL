@@ -50,6 +50,7 @@ class Track:
     class_name: str = "unknown"
     confidence: float = 0.0
     global_id: Optional[str] = None  # Global Re-ID across cameras
+    face_bbox: Optional[List[int]] = None  # Face bounding box [x1, y1, x2, y2] in frame coords
     
     def to_xyah(self) -> np.ndarray:
         """Get current position in (x, y, a, h) format."""

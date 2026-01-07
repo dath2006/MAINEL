@@ -16,6 +16,6 @@ class BaseTracker(ABC):
         pass
     
     @abstractmethod
-    def update(self, detections: List[Detection], features: np.ndarray = None):
+    def update(self, detections: List[Detection], frame: np.ndarray = None, features: np.ndarray = None):
         """Update tracks with new detections."""
         pass

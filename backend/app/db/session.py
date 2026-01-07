@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
 )
+from sqlalchemy.pool import NullPool
 from sqlalchemy.orm import DeclarativeBase
 from loguru import logger
 
@@ -26,9 +27,8 @@ class Base(DeclarativeBase):
 # Create async engine
 engine = create_async_engine(
     settings.database_url,
-    pool_size=settings.database_pool_size,
-    max_overflow=settings.database_max_overflow,
     echo=settings.debug,
+    poolclass=NullPool,
 )
 
 # Session factory

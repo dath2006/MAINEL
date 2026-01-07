@@ -13,6 +13,9 @@ from loguru import logger
 
 from app.core.reid import VisualMatcher, SpatioTemporalScorer, CameraTopology
 from app.config import settings
+from app.db.repositories.global_track_repo import GlobalTrackRepository
+from app.db.session import get_db_context
+from app.db.models import TrackStatus
 
 
 @dataclass
@@ -69,14 +72,37 @@ class ReIDService:
         self._recent_tracklets: Dict[UUID, TrackletInfo] = {}
         self._tracklet_expiry = timedelta(seconds=self.max_transition_time * 2)
         
-        # Global track counter
-        self._next_global_id = 1
-        
         # Person thumbnails for gallery display (global_id -> base64 image)
         self.person_thumbnails: Dict[str, str] = {}
         
         logger.info(f"ReIDService initialized (threshold={self.match_threshold})")
     
+    async def load_initial_state(self):
+        """Load known identities from database."""
+        logger.info("Loading ReID identities from database...")
+        async with get_db_context() as session:
+            repo = GlobalTrackRepository(session)
+            
+            # Load active tracks to populate gallery
+            # We load ALL active tracks to ensure we can match returning people
+            active_tracks = await repo.get_active(limit=1000)
+            
+            count = 0
+            for track in active_tracks:
+                if track.avg_embedding and track.camera_sequence:
+                    self.visual_matcher.add_to_gallery(
+                        str(track.id),
+                        np.array(track.avg_embedding, dtype=np.float32),
+                        track.camera_sequence[-1],
+                        track.last_seen
+                    )
+                    # Restore thumbnail from database if available
+                    if track.thumbnail_base64:
+                        self.person_thumbnails[str(track.id)] = track.thumbnail_base64
+                    count += 1
+            
+            logger.info(f"Loaded {count} identities into ReID gallery (with {len(self.person_thumbnails)} thumbnails)")
+
     def register_camera(
         self,
         camera_id: int,
@@ -137,15 +163,6 @@ class ReIDService:
     ) -> MatchResult:
         """
         Match detection to existing global identity.
-        
-        Args:
-            camera_id: Camera where detection occurred
-            embedding: Feature embedding
-            timestamp: Detection timestamp
-            top_k: Number of candidates to consider
-            
-        Returns:
-            MatchResult with best match or new identity
         """
         # Clean expired tracklets
         self._clean_expired(timestamp)
@@ -155,7 +172,7 @@ class ReIDService:
         
         if not visual_matches:
             # No matches, create new identity
-            return self._create_new_identity(camera_id, embedding, timestamp)
+            return await self._create_new_identity(camera_id, embedding, timestamp)
         
         # Score candidates with spatial-temporal constraints
         best_match = None
@@ -178,13 +195,7 @@ class ReIDService:
                 )
             
             # Joint score: weight visual more heavily since ST may not be configured
-            # If cameras not registered, st_prob defaults to low - don't penalize
             joint = visual_sim * 0.8 + st_prob * 0.2
-            
-            logger.debug(
-                f"ReID candidate: {global_id[:8]} visual={visual_sim:.3f} "
-                f"st={st_prob:.3f} joint={joint:.3f}"
-            )
             
             if joint > best_score:
                 best_score = joint
@@ -199,6 +210,28 @@ class ReIDService:
                 global_id, embedding, camera_id, timestamp
             )
             
+            # Persist update to DB
+            async with get_db_context() as session:
+                repo = GlobalTrackRepository(session)
+                # Update camera sequence
+                await repo.add_camera_to_sequence(
+                    UUID(global_id), camera_id, timestamp
+                )
+                # Update embedding (VisualMatcher keeps history, here we save AVG or latest)
+                # Since we don't calculate avg here easily without history, we can save this embedding
+                # OR better: let repo handle it if we passed history.
+                # For now, simplistic approach: update avg with moving average or just replace?
+                # GlobalTrackRepository.update_embedding expects List[float].
+                # We can skip updating avg_embedding on every frame for performance,
+                # or do it periodically. For now, let's NOT update avg_embedding on every match 
+                # to avoid DB spam, unless it's a significant change?
+                # Actually, strictly required for Search to improve over time.
+                # Let's verify if VisualMatcher exposes the new average.
+                # It doesn't. 
+                # We'll skip updating avg_embedding in DB for every frame for now, 
+                # relying on the initial visual match.
+                # BUT we DO update camera_sequence and last_seen.
+            
             # Update ST scorer TTD for cross-camera transitions
             entry = self.visual_matcher.gallery[global_id]
             if entry.last_camera_id != camera_id:
@@ -210,11 +243,6 @@ class ReIDService:
                     entry.last_camera_id, camera_id, time_delta
                 )
             
-            logger.info(
-                f"ReID match: {global_id[:8]} (visual={visual_sim:.3f}, "
-                f"st={st_prob:.3f}, joint={joint:.3f})"
-            )
-            
             return MatchResult(
                 global_track_id=UUID(global_id),
                 visual_similarity=visual_sim,
@@ -224,18 +252,25 @@ class ReIDService:
             )
         
         # No confident match, create new identity
-        return self._create_new_identity(camera_id, embedding, timestamp)
+        return await self._create_new_identity(camera_id, embedding, timestamp)
     
-    def _create_new_identity(
+    async def _create_new_identity(
         self,
         camera_id: int,
         embedding: np.ndarray,
         timestamp: datetime,
     ) -> MatchResult:
         """Create a new global identity."""
-        from uuid import uuid4
         
-        global_id = uuid4()
+        # Persist to DB first to get ID
+        async with get_db_context() as session:
+            repo = GlobalTrackRepository(session)
+            track = await repo.create(
+                first_seen=timestamp,
+                camera_id=camera_id,
+                avg_embedding=embedding.tolist()
+            )
+            global_id = track.id
         
         self.visual_matcher.add_to_gallery(
             str(global_id), embedding, camera_id, timestamp
@@ -272,17 +307,17 @@ class ReIDService:
         import cv2
         import numpy as np
         
+        logger.info(f"search_by_image: Received {len(image_bytes)} bytes, top_k={top_k}, threshold={threshold}")
+        
         # Decode image
         nparr = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         if img is None:
+            logger.error("Failed to decode image")
             raise ValueError("Invalid image data")
-            
-        # TODO: Run person detection/cropping if full image is uploaded?
-        # For now, assume the uploaded image is already a crop of a person.
-        # Resize to standard size expected by ReID model if needed, 
-        # but the encoder usually handles it.
         
+        logger.info(f"Decoded image: shape={img.shape}")
+            
         # Get embedding using TrackingService
         from app.services.tracking_service import get_tracking_service
         tracking_service = get_tracking_service()
@@ -290,22 +325,31 @@ class ReIDService:
         embedding = tracking_service.extract_from_image(img)
         
         if embedding is None:
+            logger.error("Failed to extract features from image")
             raise ValueError("Failed to extract features from image")
+        
+        logger.info(f"Extracted embedding: shape={embedding.shape}")
+        logger.info(f"Gallery size: {self.visual_matcher.gallery_size}")
         
         # Search gallery
         matches = self.visual_matcher.match(embedding, top_k=top_k)
         
+        logger.info(f"Visual matcher returned {len(matches)} matches")
+        
         results = []
-        for global_id, score, entry in matches:
-            logger.info(f"Search candidate: {global_id} score={score:.4f} threshold={threshold}")
+        for idx, (global_id, score, entry) in enumerate(matches):
+            logger.info(f"Match {idx+1}: global_id={global_id}, score={score:.4f}, threshold={threshold}")
             if score >= threshold:
                 results.append({
                     "global_track_id": global_id,
                     "score": score,
                     "last_seen": entry.last_seen,
-                    "camera_sequence": [entry.last_camera_id], # Simplified for now
+                    "camera_sequence": [entry.last_camera_id],
                 })
+            else:
+                logger.info(f"  -> FILTERED OUT (below threshold)")
         
+        logger.info(f"Returning {len(results)} results after threshold filter (from {len(matches)} total matches)")
         return results
     
     def get_plausible_cameras(
@@ -321,8 +365,32 @@ class ReIDService:
         return self.visual_matcher.gallery_size
     
     def set_thumbnail(self, global_id: str, thumbnail_base64: str):
-        """Store a thumbnail for a person."""
+        """Store a thumbnail for a person in memory and database."""
+        # Store in memory for immediate access
         self.person_thumbnails[global_id] = thumbnail_base64
+        
+        # Persist to database asynchronously
+        import asyncio
+        try:
+            # Use background task to avoid blocking
+            asyncio.create_task(self._save_thumbnail_to_db(global_id, thumbnail_base64))
+        except RuntimeError:
+            # If no event loop, log warning - thumbnail will still be in memory
+            logger.warning(f"Could not schedule thumbnail save for {global_id} - no event loop")
+    
+    async def _save_thumbnail_to_db(self, global_id: str, thumbnail_base64: str):
+        """Save thumbnail to database."""
+        try:
+            from uuid import UUID
+            async with get_db_context() as session:
+                repo = GlobalTrackRepository(session)
+                track = await repo.get_by_id(UUID(global_id))
+                if track:
+                    track.thumbnail_base64 = thumbnail_base64
+                    await session.commit()
+                    logger.debug(f"Saved thumbnail to DB for {global_id}")
+        except Exception as e:
+            logger.error(f"Failed to save thumbnail to DB for {global_id}: {e}")
     
     def get_gallery(self) -> List[Dict]:
         """Get all gallery entries with thumbnails."""
@@ -333,6 +401,7 @@ class ReIDService:
                 "last_camera_id": entry.last_camera_id,
                 "last_seen": entry.last_seen.isoformat(),
                 "appearance_count": entry.appearance_count,
+                # Fetch from in-memory cache (populated from DB on startup or newly captured)
                 "thumbnail": self.person_thumbnails.get(global_id),
             })
         return entries

@@ -128,8 +128,12 @@ async def search_by_image(
     stream_manager = get_stream_manager()
     
     try:
+        logger.info(f"Search request: file={file.filename}, limit={limit}, threshold={threshold}")
         content = await file.read()
+        logger.info(f"Read {len(content)} bytes from uploaded file")
+        
         matches = reid_service.search_by_image(content, top_k=limit, threshold=threshold)
+        logger.info(f"Found {len(matches)} matches from ReID service")
         
         # Enrich results with GlobalTrack info and Camera locations
         results = []
@@ -179,14 +183,16 @@ async def search_by_image(
                      "score": float(score),
                      "path_points": path_points
                  })
-                 
+        
+        logger.info(f"Returning {len(results)} enriched search results")
         return results
         
     except ValueError as e:
+        logger.error(f"Search validation error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Search error: {e}")
-        raise HTTPException(status_code=500, detail="Internal search error")
+        logger.error(f"Search error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal search error: {str(e)}")
 
 
 @router.get("/{track_id}/interpolate")

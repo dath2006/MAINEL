@@ -65,6 +65,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     except Exception as e:
         logger.error(f"Failed to restore sources: {e}")
     
+    # Load ReID persistence
+    from app.services.reid_service import get_reid_service
+    try:
+        await get_reid_service().load_initial_state()
+        logger.info("Restored ReID identities from database")
+    except Exception as e:
+        logger.error(f"Failed to restore ReID identities: {e}")
+    
     yield
     
     # Shutdown

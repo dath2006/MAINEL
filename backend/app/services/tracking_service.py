@@ -11,8 +11,10 @@ import numpy as np
 from loguru import logger
 
 from app.core.detection import YOLODetector, Detection, get_detector
-from app.core.tracking import DeepSORTTracker, Track, TrackState
-from app.core.features import OSNetExtractor, get_extractor
+from app.core.tracking import Track, TrackState
+from app.core.tracking.boxmot_tracker import BoxMOTTracker
+from app.core.tracking.boxmot_tracker import BoxMOTTracker
+from app.core.features.unified_extractor import UnifiedFeatureExtractor
 from app.config import settings
 
 
@@ -21,10 +23,9 @@ class CameraState:
     
     def __init__(self, camera_id: int):
         self.camera_id = camera_id
-        self.tracker = DeepSORTTracker(
-            max_age=settings.deepsort_max_age,
-            n_init=settings.deepsort_n_init,
-            max_iou_distance=settings.deepsort_max_iou_distance,
+        self.tracker = BoxMOTTracker(
+            model_name=settings.osnet_model_path or 'osnet_x1_0', # Use setting if available
+            device=settings.device
         )
         self.active_tracklets: Dict[int, UUID] = {}  # local_id -> tracklet_uuid
         self.last_frame_time: Optional[datetime] = None
@@ -41,10 +42,9 @@ class TrackingService:
     def __init__(
         self,
         detector: Optional[YOLODetector] = None,
-        extractor: Optional[OSNetExtractor] = None,
     ):
         self.detector = detector
-        self.extractor = extractor
+        self.extractor = None
         
         # Per-camera state
         self.camera_states: Dict[int, CameraState] = {}
@@ -66,11 +66,11 @@ class TrackingService:
             )
         return self.detector
     
-    def _get_extractor(self) -> OSNetExtractor:
+    def _get_extractor(self) -> UnifiedFeatureExtractor:
         """Lazy load extractor."""
         if self.extractor is None:
-            self.extractor = get_extractor(
-                model_path=settings.osnet_model_path,
+            self.extractor = UnifiedFeatureExtractor(
+                model_name=settings.osnet_model_path or 'osnet_x1_0',
                 device=settings.device,
             )
         return self.extractor
@@ -106,18 +106,13 @@ class TrackingService:
         
         # 1. Detection
         detections = detector.detect(frame)
+        print(f"DEBUG_PRINT: YOLODetector found {len(detections)} detections")
+        if detections:
+             print(f"DEBUG_PRINT: Det confs: {[round(d.confidence, 2) for d in detections]}")
         
-        # 2. Feature extraction (if enabled)
-        features = None
-        if extract_features and len(detections) > 0:
-            extractor = self._get_extractor()
-            crops = detector.crop_detections(frame, detections)
-            if crops:
-                features = extractor.extract_batch(crops)
-        
-        # 3. Predict and update tracker
+        # 2. Tracking (inc. Feature Extraction via BoxMOT)
         state.tracker.predict()
-        active_tracks = state.tracker.update(detections, features)
+        active_tracks = state.tracker.update(detections, frame=frame)
         
         # 4. Handle track lifecycle
         new_features = await self._handle_track_events(
@@ -142,8 +137,13 @@ class TrackingService:
             return None
             
         extractor = self._get_extractor()
-        # extract_batch expects a list of images
-        features = extractor.extract_batch([image])
+        extractor = self._get_extractor()
+        # Create a dummy detection covering the full image
+        h, w = image.shape[:2]
+        # x1, y1, x2, y2
+        detections = np.array([[0, 0, w, h]])
+        
+        features = extractor.extract(image, detections)
         
         if features is not None and len(features) > 0:
             return features[0]

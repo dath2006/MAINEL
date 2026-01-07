@@ -27,8 +27,8 @@ target_metadata = Base.metadata
 def get_url():
     """Get database URL from environment."""
     from app.config import settings
-    # Convert async URL to sync for Alembic
-    return settings.database_url.replace("+asyncpg", "")
+    # Convert async URL to sync for Alembic (asyncpg -> psycopg2)
+    return settings.database_url.replace("+asyncpg", "").replace("postgresql+asyncpg", "postgresql")
 
 
 def run_migrations_offline() -> None:
@@ -52,26 +52,27 @@ def do_run_migrations(connection: Connection) -> None:
         context.run_migrations()
 
 
-async def run_async_migrations() -> None:
-    """Run migrations in 'online' mode with async engine."""
+def run_migrations_online() -> None:
+    """Run migrations in 'online' mode."""
+    from sqlalchemy import engine_from_config
+    
     configuration = config.get_section(config.config_ini_section)
     configuration["sqlalchemy.url"] = get_url()
     
-    connectable = async_engine_from_config(
+    connectable = engine_from_config(
         configuration,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
 
-    async with connectable.connect() as connection:
-        await connection.run_sync(do_run_migrations)
+    with connectable.connect() as connection:
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata
+        )
 
-    await connectable.dispose()
-
-
-def run_migrations_online() -> None:
-    """Run migrations in 'online' mode."""
-    asyncio.run(run_async_migrations())
+        with context.begin_transaction():
+            context.run_migrations()
 
 
 if context.is_offline_mode():

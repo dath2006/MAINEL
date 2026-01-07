@@ -283,10 +283,14 @@ async def get_person_gallery():
     
     reid_service = get_reid_service()
     gallery = reid_service.get_gallery()
+    gallery_size = reid_service.get_gallery_size()
+    
+    logger.info(f"Gallery request: {gallery_size} persons in gallery, returning {len(gallery)} entries")
     
     return {
         "persons": gallery,
         "total": len(gallery),
+        "gallery_size": gallery_size,  # From visual matcher
     }
 
 

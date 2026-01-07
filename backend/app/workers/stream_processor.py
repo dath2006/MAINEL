@@ -86,18 +86,28 @@ class StreamProcessor:
     
     def _run_loop(self):
         """Main processing loop."""
+        # Create dedicated loop for this thread
+        self._worker_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._worker_loop)
+
         stream_manager = get_stream_manager()
         
         # Try to get ML services, but don't fail if unavailable
         tracking_service = None
         reid_service = None
         try:
+            print("DEBUG_PRINT: Loading ML services...")
             tracking_service = get_tracking_service()
+            print(f"DEBUG_PRINT: tracking_service loaded: {tracking_service}")
             reid_service = get_reid_service()
+            print("DEBUG_PRINT: ML services loaded successfully")
             logger.info("ML services loaded successfully")
         except Exception as e:
+            print(f"DEBUG_PRINT: FAILED TO LOAD SERVICES: {e}")
+            import traceback
+            traceback.print_exc()
             logger.warning(f"ML services not available (frames will still stream): {e}")
-        
+            
         while self._running:
             # Check if playing
             if stream_manager.state != PlaybackState.PLAYING:
@@ -116,6 +126,8 @@ class StreamProcessor:
             # Get frame from queue
             frame_data = stream_manager.get_next_frame(timeout=0.5)
             if frame_data is None:
+                if self._frame_count % 10 == 0:
+                     print("DEBUG_PRINT: Waiting for frames... (Queue empty)")
                 continue
             
             self._frame_count += 1
@@ -143,6 +155,8 @@ class StreamProcessor:
                 and tracking_service is not None
             )
             
+            print(f"DEBUG_PRINT LOOP: frame={self._frame_count}, run_ml={run_ml}, tracking={tracking_service is not None}, fps={self._fps:.1f}")
+
             if run_ml:
                 try:
                     # Process frame through pipeline
@@ -171,16 +185,21 @@ class StreamProcessor:
                         gc.collect()
                         time.sleep(0.1)
                     else:
-                        logger.debug(f"RuntimeError in ML processing {self.source_id}: {e}")
+                        print(f"DEBUG_PRINT: RuntimeError in ML: {e}")
+                        logger.error(f"RuntimeError in ML processing {self.source_id}: {e}")
                 except Exception as e:
-                    logger.debug(f"Frame processing error: {e}")
+                    print(f"DEBUG_PRINT: Frame processing error: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    logger.error(f"Frame processing error: {e}")
             else:
-                # Reuse last known results for smoothness
-                frame_detections = self._last_detections
-                frame_tracks = self._last_tracks
+                # Don't reuse old tracks - prevents stuck bounding boxes
+                # Send current frame WITHOUT old bounding boxes
+                frame_detections = []
+                frame_tracks = []
             
-            # Broadcast frame (with overlays if ML ran)
-            if self.broadcast_frames:
+            # Broadcast frame ONLY when ML ran (to avoid stale bounding boxes)
+            if self.broadcast_frames and run_ml:
                 try:
                     self._broadcast_frame(
                         frame_data, 
@@ -207,6 +226,8 @@ class StreamProcessor:
                 except Exception as e:
                     logger.error(f"Error broadcasting frame for source {frame_data.source_id}: {e}")
                     continue
+        if hasattr(self, '_worker_loop'):
+            self._worker_loop.close()
     
     def _process_frame(
         self,
@@ -222,13 +243,9 @@ class StreamProcessor:
         }
         
         # Run tracking (detection + tracking + features)
-        # Note: ML services are likely async, but we are in a thread.
-        # We should use a local loop for ML ops if they are not bound to main loop.
-        # However, for simplicity/safety, we create a new loop for ML ONLY.
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        # We use the persistent worker loop for async ML ops
         try:
-            tracks, features = loop.run_until_complete(
+            tracks, features = self._worker_loop.run_until_complete(
                 tracking_service.process_frame(
                     camera_id=frame_data.camera_id,
                     frame=frame_data.frame,
@@ -252,10 +269,17 @@ class StreamProcessor:
                         continue
                         
                     feature = track.features[-1] # Latest feature
+                    
+                    # OPTIMIZATION: If track already has global_id, skip expensive matching
+                    # This enforces identity consistency for the life of the track
+                    if track.global_id:
+                        logger.debug(f"ReID: Track {track.track_id} already has Global ID {track.global_id}, skipping match")
+                        continue
+
                     logger.info(f"ReID: Matching track {track.track_id} with feature shape {feature.shape}")
                     
                     try:
-                        match = loop.run_until_complete(
+                        match = self._worker_loop.run_until_complete(
                             reid_service.match_identity(
                                 camera_id=frame_data.camera_id,
                                 embedding=feature,
@@ -275,8 +299,11 @@ class StreamProcessor:
                         })
                         track_store.update_camera_sequence(track.global_id, frame_data.camera_id)
 
-                        # Capture thumbnail for new identities
-                        if match.is_new:
+                        # Capture thumbnail for new identities OR if no thumbnail exists yet
+                        existing_thumb = reid_service.person_thumbnails.get(track.global_id)
+                        should_capture = match.is_new or existing_thumb is None
+                        
+                        if should_capture:
                             try:
                                 import cv2
                                 import base64
@@ -289,14 +316,41 @@ class StreamProcessor:
                                 x1, y1 = max(0, x1), max(0, y1)
                                 x2, y2 = min(w, x2), min(h, y2)
                                 
-                                if x2 > x1 and y2 > y1:
+                                crop_w = x2 - x1
+                                crop_h = y2 - y1
+                                
+                                # RELAXED Quality check to prevent empty images
+                                # Allow smaller crops, especially for faces/far objects
+                                MIN_CROP_W, MIN_CROP_H = 24, 48 
+                                EDGE_MARGIN = 2 # Reduced from 10 to capture people entering/leaving
+                                
+                                is_quality_crop = (
+                                    crop_w >= MIN_CROP_W and 
+                                    crop_h >= MIN_CROP_H and
+                                    x1 >= EDGE_MARGIN and 
+                                    y1 >= EDGE_MARGIN and
+                                    x2 <= w - EDGE_MARGIN and
+                                    y2 <= h - EDGE_MARGIN
+                                )
+                                
+                                if is_quality_crop:
                                     crop = frame_data.frame[y1:y2, x1:x2]
-                                    # Resize to thumbnail size
-                                    thumb = cv2.resize(crop, (64, 128))
-                                    _, buffer = cv2.imencode('.jpg', thumb, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                                    thumb_b64 = base64.b64encode(buffer).decode('utf-8')
-                                    reid_service.set_thumbnail(track.global_id, thumb_b64)
-                                    logger.info(f"Captured thumbnail for {track.global_id}")
+                                    if crop.size == 0 or crop.shape[0] == 0 or crop.shape[1] == 0:
+                                         logger.warning(f"Empty crop for {track.global_id}, skipping thumbnail")
+                                    else:
+                                        # Resize to thumbnail size
+                                        thumb = cv2.resize(crop, (64, 128))
+                                        _, buffer = cv2.imencode('.jpg', thumb, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                                        thumb_b64 = base64.b64encode(buffer).decode('utf-8')
+                                        
+                                        # Double check generated b64
+                                        if thumb_b64 and len(thumb_b64) > 100:
+                                            reid_service.set_thumbnail(track.global_id, thumb_b64)
+                                            logger.info(f"Captured thumbnail for {track.global_id}")
+                                        else:
+                                            logger.warning(f"Generated empty/invalid b64 for {track.global_id}")
+                                else:
+                                    logger.debug(f"Skipped low-quality thumbnail for {track.global_id} (size={crop_w}x{crop_h})")
                             except Exception as thumb_err:
                                 logger.warning(f"Failed to capture thumbnail: {thumb_err}")
                         
@@ -310,7 +364,14 @@ class StreamProcessor:
                         logger.error(f"ReID error for track {track.track_id}: {e}")
 
             # 3. Convert tracks to serializable format (After ReID updates)
+            # CRITICAL: Only include tracks that were matched to actual detections
+            # BoxMOT returns det_idx=-1 for coasted/predicted tracks - these must be filtered
             for track in tracks:
+                # Skip if this track wasn't matched to a detection (coasted/predicted)
+                # We check time_since_update==0 as a proxy for "was matched this frame"
+                if track.time_since_update != 0:
+                    continue
+                    
                 # Filter low confidence tracks to reduce "fake boxes"
                 conf = float(track.confidence) if hasattr(track, 'confidence') else 0.0
                 if conf < 0.5 and track.state.name == 'CONFIRMED':
@@ -326,10 +387,12 @@ class StreamProcessor:
                     "confidence": conf,
                     "class_name": getattr(track, 'class_name', 'unknown'),
                     "state": track.state.name,
+                    "face_bbox": getattr(track, 'face_bbox', None),  # Include face bbox
                 })
             
+            
         finally:
-            loop.close()
+            pass # Loop management is handled in _run_loop
         
         return results
     
@@ -349,8 +412,14 @@ class StreamProcessor:
                 x1, y1, x2, y2 = map(int, bbox)
                 track_id = track["track_id"]
                 
-                # Draw bounding box
+                # Draw body bounding box (green, 2px)
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                
+                # Draw face bounding box if available (cyan, 1px thin)
+                face_bbox = track.get("face_bbox")
+                if face_bbox:
+                    fx1, fy1, fx2, fy2 = map(int, face_bbox)
+                    cv2.rectangle(frame, (fx1, fy1), (fx2, fy2), (255, 255, 0), 1)  # Cyan color
                 
                 # Draw label
                 label = f"ID: {track_id}"

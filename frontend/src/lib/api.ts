@@ -18,7 +18,7 @@ export interface StreamSource {
   id: number;
   camera_id: number;
   name: string;
-  source_type: 'video_file' | 'webcam' | 'rtsp';
+  source_type: "video_file" | "webcam" | "rtsp";
   source_path: string;
   fps: number;
   width: number;
@@ -31,7 +31,7 @@ export interface StreamSource {
 }
 
 export interface PlaybackStatus {
-  state: 'stopped' | 'playing' | 'paused';
+  state: "stopped" | "playing" | "paused";
   source_count: number;
   target_fps: number;
   queue_size: number;
@@ -47,7 +47,7 @@ export interface TrackPathPoint {
 
 export interface GlobalTrack {
   id: string;
-  status: 'active' | 'lost' | 'finished';
+  status: "active" | "lost" | "finished";
   first_seen: string;
   last_seen: string;
   camera_sequence: number[];
@@ -61,7 +61,7 @@ export interface SearchResult {
 }
 
 export interface SystemHealth {
-  status: 'healthy' | 'degraded' | 'unhealthy';
+  status: "healthy" | "degraded" | "unhealthy";
   active_tracks: number;
   cpu_usage?: number;
   memory_usage?: number;
@@ -69,63 +69,79 @@ export interface SystemHealth {
 
 // --- API Client ---
 
-const API_BASE = 'http://localhost:8000/api/v1';
+const API_BASE = "http://localhost:8000/api/v1";
 
-async function fetchJson<T>(endpoint: string, options?: RequestInit): Promise<T> {
+async function fetchJson<T>(
+  endpoint: string,
+  options?: RequestInit
+): Promise<T> {
   const res = await fetch(`${API_BASE}${endpoint}`, options);
   if (!res.ok) {
-    const error = await res.json().catch(() => ({ detail: 'Unknown error' }));
+    const error = await res.json().catch(() => ({ detail: "Unknown error" }));
     throw new Error(error.detail || `API Error: ${res.statusText}`);
   }
   return res.json();
 }
 
 export const camerasApi = {
-  list: () => fetchJson<Camera[]>('/cameras/'),
-  create: (data: any) => fetchJson<Camera>('/cameras/', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  }),
-  delete: (id: number) => fetchJson(`/cameras/${id}`, { method: 'DELETE' }),
-  activate: (id: number) => fetchJson(`/cameras/${id}/activate`, { method: 'POST' }),
-  deactivate: (id: number) => fetchJson(`/cameras/${id}/deactivate`, { method: 'POST' }),
+  list: () => fetchJson<Camera[]>("/cameras/"),
+  create: (data: any) =>
+    fetchJson<Camera>("/cameras/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  delete: (id: number) => fetchJson(`/cameras/${id}`, { method: "DELETE" }),
+  activate: (id: number) =>
+    fetchJson(`/cameras/${id}/activate`, { method: "POST" }),
+  deactivate: (id: number) =>
+    fetchJson(`/cameras/${id}/deactivate`, { method: "POST" }),
 };
 
 export const streamsApi = {
-  getSources: () => fetchJson<StreamSource[]>('/streams/sources'),
-  addSource: (data: any) => fetchJson<StreamSource>('/streams/sources', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  }),
-  removeSource: (id: number) => fetchJson(`/streams/sources/${id}`, { method: 'DELETE' }),
-  play: () => fetchJson('/streams/play', { method: 'POST' }),
-  pause: () => fetchJson('/streams/pause', { method: 'POST' }),
-  stop: () => fetchJson('/streams/stop', { method: 'POST' }),
-  getStatus: () => fetchJson<PlaybackStatus>('/streams/status'),
-  setFps: (fps: number) => fetchJson('/streams/fps', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ fps }),
-  }),
+  getSources: () => fetchJson<StreamSource[]>("/streams/sources"),
+  addSource: (data: any) =>
+    fetchJson<StreamSource>("/streams/sources", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  removeSource: (id: number) =>
+    fetchJson(`/streams/sources/${id}`, { method: "DELETE" }),
+  play: () => fetchJson("/streams/play", { method: "POST" }),
+  pause: () => fetchJson("/streams/pause", { method: "POST" }),
+  stop: () => fetchJson("/streams/stop", { method: "POST" }),
+  getStatus: () => fetchJson<PlaybackStatus>("/streams/status"),
+  setFps: (fps: number) =>
+    fetchJson("/streams/fps", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fps }),
+    }),
 };
 
 export const tracksApi = {
-  listActive: () => fetchJson<GlobalTrack[]>('/tracks/active'),
-  searchByImage: async (file: File, limit: number = 5): Promise<SearchResult[]> => {
+  listActive: () => fetchJson<GlobalTrack[]>("/tracks/active"),
+  searchByImage: async (
+    file: File,
+    limit: number = 5,
+    threshold: number = 0.3
+  ): Promise<SearchResult[]> => {
     const formData = new FormData();
-    formData.append('file', file);
-    const res = await fetch(`${API_BASE}/tracks/search/image?limit=${limit}`, {
-        method: 'POST',
+    formData.append("file", file);
+    const res = await fetch(
+      `${API_BASE}/tracks/search/image?limit=${limit}&threshold=${threshold}`,
+      {
+        method: "POST",
         body: formData,
-    });
+      }
+    );
     if (!res.ok) {
-        const error = await res.json().catch(() => ({ detail: 'Unknown error' }));
-        throw new Error(error.detail || `API Error: ${res.statusText}`);
+      const error = await res.json().catch(() => ({ detail: "Unknown error" }));
+      throw new Error(error.detail || `API Error: ${res.statusText}`);
     }
     return res.json();
-  }
+  },
 };
 
 export const createTrackingSocket = (
@@ -134,7 +150,7 @@ export const createTrackingSocket = (
   onConnect: () => void,
   onError: (error: Event) => void
 ) => {
-  const ws = new WebSocket('ws://localhost:8000/api/v1/ws/tracks');
+  const ws = new WebSocket("ws://localhost:8000/api/v1/ws/tracks");
 
   ws.onopen = () => {
     onConnect();
@@ -145,7 +161,7 @@ export const createTrackingSocket = (
       const data = JSON.parse(event.data);
       onMessage(data);
     } catch (e) {
-      console.error('WebSocket parse error:', e);
+      console.error("WebSocket parse error:", e);
     }
   };
 
@@ -164,7 +180,7 @@ const api = {
   cameras: camerasApi,
   streams: streamsApi,
   tracks: tracksApi,
-  systemInfo: () => fetchJson<SystemHealth>('/health'),
+  systemInfo: () => fetchJson<SystemHealth>("/health"),
 };
 
 export default api;

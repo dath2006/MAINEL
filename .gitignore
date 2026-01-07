@@ -205,3 +205,5 @@ secrets/
 
 #Videos:
 /backend/app/videos/*
+
+*.pt
