@@ -7,6 +7,9 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Users, Trash2, RefreshCw } from "lucide-react";
 
+
+const USE_MOCK = false; // for mock data: set to false later
+
 interface PersonEntry {
     global_id: string;
     last_camera_id: number;
@@ -14,6 +17,31 @@ interface PersonEntry {
     appearance_count: number;
     thumbnail: string | null;
 }
+
+const MOCK_PERSONS: PersonEntry[] = [ //for mock data
+    {
+        global_id: "mock-001",
+        last_camera_id: 1,
+        last_seen: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
+        appearance_count: 4,
+        thumbnail: null,
+    },
+    {
+        global_id: "mock-002",
+        last_camera_id: 3,
+        last_seen: new Date(Date.now() - 8 * 60 * 1000).toISOString(),
+        appearance_count: 2,
+        thumbnail: null,
+    },
+    {
+        global_id: "mock-003",
+        last_camera_id: 2,
+        last_seen: new Date(Date.now() - 25 * 60 * 1000).toISOString(),
+        appearance_count: 7,
+        thumbnail: null,
+    },
+];
+
 
 interface PersonGalleryProps {
     apiUrl?: string;
@@ -29,6 +57,12 @@ export function PersonGallery({
     const [error, setError] = useState<string | null>(null);
 
     const fetchGallery = async () => {
+
+        if(USE_MOCK){  // for mock data
+            setPersons(MOCK_PERSONS);
+            setError(null);
+            return;
+        }
         try {
             setLoading(true);
             const response = await fetch(`${apiUrl}/gallery`);
@@ -55,6 +89,8 @@ export function PersonGallery({
 
     useEffect(() => {
         fetchGallery();
+
+        if(USE_MOCK) return; // for mock data
         const interval = setInterval(fetchGallery, refreshInterval);
         return () => clearInterval(interval);
     }, [refreshInterval]);
@@ -78,6 +114,12 @@ export function PersonGallery({
                         <Users className="h-5 w-5" />
                         Person Gallery
                         <Badge variant="secondary">{persons.length}</Badge>
+
+                        {USE_MOCK && ( // for mock data
+                        <Badge variant="secondary" className="ml-2">
+                            Mock
+                        </Badge>
+                        )}
                     </CardTitle>
                     <div className="flex gap-2">
                         <Button 
@@ -113,10 +155,10 @@ export function PersonGallery({
                             {persons.map((person) => (
                                 <div 
                                     key={person.global_id}
-                                    className="border rounded-lg p-2 flex flex-col items-center gap-2 bg-card hover:bg-accent transition-colors"
+                                    className="border bg-card rounded-xl p-3 pt-6 flex flex-col items-center gap-2  drop-shadow-md hover:shadow-lg hover:translate-y-0.5 hover:bg-accent/20 hover:border-gray-400 transition-all "
                                 >
                                     {/* Thumbnail */}
-                                    <div className="w-16 h-32 bg-muted rounded overflow-hidden">
+                                    <div className="w-40 h-40  ring-1 ring-border bg-muted rounded hover:ring-gray-300 overflow-hidden">
                                         {person.thumbnail ? (
                                             <img 
                                                 src={`data:image/jpeg;base64,${person.thumbnail}`}
@@ -132,16 +174,14 @@ export function PersonGallery({
                                     
                                     {/* Info */}
                                     <div className="text-center w-full">
-                                        <Badge variant="outline" className="text-xs mb-1">
+                                        <Badge  className="text-xs font-medium mt-1 mb-1">
                                             {person.global_id.slice(0, 8)}
                                         </Badge>
-                                        <div className="text-xs text-muted-foreground">
+                                        <div className="text-xs text-foreground">
                                             Cam {person.last_camera_id}
                                         </div>
                                         <div className="text-xs text-muted-foreground">
-                                            {formatTimeAgo(person.last_seen)}
-                                        </div>
-                                        <div className="text-xs text-muted-foreground">
+                                            {formatTimeAgo(person.last_seen)}<br/>
                                             {person.appearance_count} obs
                                         </div>
                                     </div>

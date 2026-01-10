@@ -201,7 +201,7 @@ export default function TrackingPage() {
       
       <main className="flex-1 space-y-4 p-6">
         {/* Debug Status Bar */}
-        <div className="flex items-center justify-between rounded bg-slate-800 p-2 text-xs text-white">
+        <div className="flex items-center justify-between rounded bg-slate-800 p-2 text-sm text-white">
           <div className="flex gap-4">
             <span>WS: <strong className={wsStatus === 'connected' ? 'text-green-400' : 'text-red-400'}>{wsStatus}</strong></span>
             <span>Frames: <strong>{frameCount}</strong></span>
@@ -213,14 +213,14 @@ export default function TrackingPage() {
                 <Input 
                     type="file" 
                     accept="image/*" 
-                    className="h-8 w-60 text-xs text-gray-400 file:text-gray-400"
+                    className="h-9 w-55 text-xs text-gray-400 file:text-gray-400"
                     onChange={(e) => setSearchFile(e.target.files?.[0] || null)}
                 />
-                <Button variant = "custom" size="sm" onClick={handleSearch} disabled={!searchFile || isSearching}>
+                <Button variant = "custom" onClick={handleSearch} disabled={!searchFile || isSearching}>
                     {isSearching ? 'Searching...' : 'Search Person'}
                 </Button>
             </div>
-            <div className="text-xs text-muted-white hidden md:block">
+            <div className="text-xs text-muted-white hidden mt-1.5 md:block">
                 Tip: Click on the map to place a camera automatically.
             </div>
           </div>
@@ -382,7 +382,7 @@ export default function TrackingPage() {
                 )}
             </TabsContent>
             
-            <TabsContent value="map" className="h-[600px] w-full border rounded-lg overflow-hidden relative">
+            <TabsContent value="map" className="h-[600px] w-full border rounded-lg overflow-hidden relative z-0">
                  {/* Use MultiTrackMap for real-time updates */}
                  <MultiTrackMap 
                     sources={sources} 
