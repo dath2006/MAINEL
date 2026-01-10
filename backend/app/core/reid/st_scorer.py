@@ -12,6 +12,8 @@ import numpy as np
 from scipy import stats
 from loguru import logger
 
+from app.config import settings
+
 
 @dataclass
 class TransitionStats:
@@ -88,24 +90,33 @@ class SpatioTemporalScorer:
     - Typical pedestrian walking speeds
     """
     
-    # Typical pedestrian speeds (m/s)
-    MIN_SPEED = 0.5   # Slow walk
-    AVG_SPEED = 1.4   # Normal walk
-    MAX_SPEED = 3.0   # Fast walk / jog
+    # Typical pedestrian speeds (m/s) - Configurable via settings
+    
+    @property
+    def MIN_SPEED(self) -> float:
+        return settings.st_min_speed
+
+    @property
+    def AVG_SPEED(self) -> float:
+        return settings.st_avg_speed
+
+    @property
+    def MAX_SPEED(self) -> float:
+        return settings.st_max_speed
     
     def __init__(
         self,
-        bandwidth: float = 5.0,
+        bandwidth: float = None,
         max_transition_time: float = 300.0,
         use_parzen: bool = True,
     ):
         """
         Args:
-            bandwidth: Parzen window bandwidth
+            bandwidth: Parzen window bandwidth (from config if None)
             max_transition_time: Max allowed transition time (seconds)
             use_parzen: Use Parzen estimation vs Gaussian
         """
-        self.bandwidth = bandwidth
+        self.bandwidth = bandwidth if bandwidth is not None else settings.st_bandwidth
         self.max_transition_time = max_transition_time
         self.use_parzen = use_parzen
         
@@ -293,7 +304,7 @@ class SpatioTemporalScorer:
         from_camera: int,
         to_camera: int,
         time_delta: float,
-        threshold: float = 0.1,
+        threshold: float = None,
     ) -> bool:
         """
         Check if transition is physically plausible.
@@ -302,10 +313,11 @@ class SpatioTemporalScorer:
             from_camera: Source camera
             to_camera: Destination camera
             time_delta: Transition time in seconds
-            threshold: Minimum probability threshold
+            threshold: Minimum probability threshold (from config if None)
             
         Returns:
             True if transition is plausible
         """
+        threshold = threshold if threshold is not None else settings.st_plausibility_threshold
         score = self.calculate_score(from_camera, to_camera, time_delta)
         return score >= threshold

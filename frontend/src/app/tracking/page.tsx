@@ -54,6 +54,7 @@ export default function TrackingPage() {
   const [isSearching, setIsSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [selectedResult, setSelectedResult] = useState<SearchResult | null>(null);
+  const [searchMode, setSearchMode] = useState<'auto' | 'face' | 'body'>('auto');
 
   const [focusedSource, setFocusedSource] = useState<StreamSource | null>(null);
 
@@ -187,7 +188,7 @@ export default function TrackingPage() {
     
     setIsSearching(true);
     try {
-        const results = await tracksApi.searchByImage(searchFile);
+        const results = await tracksApi.searchByImage(searchFile, 5, searchMode);
         setSearchResults(results);
         if (results.length > 0) {
             setSelectedResult(results[0]);
@@ -215,7 +216,17 @@ export default function TrackingPage() {
           </div>
           <div className="flex flex-col items-end gap-1">
             <div className="flex gap-2">
-                <Input 
+                <select
+                    className="h-8 rounded-md border border-input bg-background px-3 py-1 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    value={searchMode}
+                    onChange={(e) => setSearchMode(e.target.value as any)}
+                    title="Search Strategy"
+                >
+                    <option value="auto">Auto (Fusion)</option>
+                    <option value="face">Face Only</option>
+                    <option value="body">Body Only</option>
+                </select>
+                <Input  
                     type="file" 
                     accept="image/*" 
                     className="h-8 w-60 text-xs text-black"

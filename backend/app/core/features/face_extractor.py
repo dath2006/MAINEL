@@ -11,6 +11,8 @@ import numpy as np
 import cv2
 from loguru import logger
 
+from app.config import settings
+
 # Try to import InsightFace
 try:
     from insightface.app import FaceAnalysis
@@ -64,7 +66,7 @@ class InsightFaceExtractor:
         self,
         model_name: str = "buffalo_l",
         det_size: Tuple[int, int] = (640, 640),
-        det_thresh: float = 0.5,
+        det_thresh: float = None,
         device: Optional[str] = None,
     ):
         """
@@ -73,9 +75,11 @@ class InsightFaceExtractor:
         Args:
             model_name: Model pack name (buffalo_l, buffalo_s, etc.)
             det_size: Detection input size
-            det_thresh: Detection confidence threshold
+            det_thresh: Detection confidence threshold (from config if None)
             device: Device ('cuda' or 'cpu', None for auto)
         """
+        # Use config value if not provided
+        det_thresh = det_thresh if det_thresh is not None else settings.face_det_threshold
         if not INSIGHTFACE_AVAILABLE:
             raise ImportError("insightface package is required for face extraction")
         
@@ -281,41 +285,63 @@ class QualityScorer:
 def create_fused_embedding(
     body_embedding: np.ndarray,
     face_embedding: Optional[np.ndarray],
-    face_weight: float = 0.4,
-    body_weight: float = 0.6,
+    face_weight: float = None,
+    body_weight: float = None,
+    face_quality: float = 1.0,
 ) -> np.ndarray:
     """
-    Fuse face and body embeddings for multi-modal matching.
+    Fuse face and body embeddings with Gated Dynamic Fusion.
+    
+    Uses quality-tier gating to prevent noise from low-quality faces
+    polluting the embedding. Ensures proper L2 normalization at
+    every step (pre-fusion AND post-fusion) for correct cosine similarity.
+    
+    Quality Tiers (configurable via settings):
+    - HIGH (>face_quality_high_tier): Trust face heavily
+    - MEDIUM (face_quality_low_tier to high_tier): Trust body more
+    - LOW (<face_quality_low_tier): Ignore face completely (body only)
     
     Args:
         body_embedding: 512-dim body embedding from OSNet
         face_embedding: 512-dim face embedding from InsightFace (or None)
-        face_weight: Weight for face embedding when available
-        body_weight: Weight for body embedding
+        face_weight: Base weight for face (default from config)
+        body_weight: Base weight for body (default from config)
+        face_quality: Quality score of the face (0.0 - 1.0)
         
     Returns:
         Fused 512-dim embedding (L2-normalized)
     """
-    if face_embedding is None:
-        # Body only - return as-is
-        norm = np.linalg.norm(body_embedding)
-        if norm > 0:
-            return body_embedding / norm
-        return body_embedding
-    
-    # Normalize both
+    # === STEP 1: Pre-normalize body embedding (CRITICAL) ===
     body_norm = np.linalg.norm(body_embedding)
-    face_norm = np.linalg.norm(face_embedding)
-    
     if body_norm > 0:
         body_embedding = body_embedding / body_norm
+    
+    # === STEP 2: Gated Fusion based on Quality Tiers ===
+    low_tier = settings.face_quality_low_tier
+    high_tier = settings.face_quality_high_tier
+    
+    # TIER 3: LOW quality (<low_tier) or no face -> Body Only
+    if face_embedding is None or face_quality < low_tier:
+        # No face or garbage face - use body only
+        return body_embedding  # Already normalized
+    
+    # Pre-normalize face embedding
+    face_norm = np.linalg.norm(face_embedding)
     if face_norm > 0:
         face_embedding = face_embedding / face_norm
     
-    # Weighted fusion
-    fused = face_weight * face_embedding + body_weight * body_embedding
+    # TIER 1: HIGH quality (>high_tier) -> Trust face heavily
+    if face_quality > high_tier:
+        high_face_weight = settings.face_high_tier_weight
+        fused = high_face_weight * face_embedding + (1 - high_face_weight) * body_embedding
     
-    # L2 normalize result
+    # TIER 2: MEDIUM quality (low_tier to high_tier) -> Trust body more
+    else:
+        medium_face_weight = settings.face_medium_tier_weight
+        fused = medium_face_weight * face_embedding + (1 - medium_face_weight) * body_embedding
+    
+    # === STEP 3: Post-normalize the fused result (CRITICAL) ===
+    # This step is often forgotten and breaks cosine similarity!
     fused_norm = np.linalg.norm(fused)
     if fused_norm > 0:
         fused = fused / fused_norm

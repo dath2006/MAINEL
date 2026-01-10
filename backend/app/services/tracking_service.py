@@ -12,7 +12,9 @@ from loguru import logger
 
 from app.core.detection import YOLODetector, Detection, get_detector
 from app.core.tracking import DeepSORTTracker, Track, TrackState
+from app.core.tracking import DeepSORTTracker, Track, TrackState
 from app.core.features import OSNetExtractor, get_extractor
+from app.core.utils.quality import is_quality_frame
 from app.config import settings
 
 
@@ -137,33 +139,44 @@ class TrackingService:
         
         # 2. Feature extraction (if enabled)
         features = None
+        face_embeddings = {}  # track_index -> face_embedding (for separate face gallery)
+        
         if extract_features and len(detections) > 0:
             extractor = self._get_extractor()
             face_extractor = self._get_face_extractor()
             crops = detector.crop_detections(frame, detections)
             if crops:
-                # Extract body features
+                # Extract body features (batch)
                 body_features = extractor.extract_batch(crops)
                 
-                # Extract face features and fuse if available
-                if face_extractor and settings.use_face_reid:
-                    from app.core.features.face_extractor import create_fused_embedding
-                    fused_features = []
-                    for i, crop in enumerate(crops):
+                final_features = []
+                for i, crop in enumerate(crops):
+                    # Quality Gate (Garbage Collector)
+                    is_good, q_score, reason = is_quality_frame(crop)
+                    
+                    if not is_good:
+                        # Skip low quality frames to prevent feature collapse
+                        # Passing None tells the tracker not to update the appearance history
+                        final_features.append(None)
+                        continue
+                    
+                    # ALWAYS use body-only for main gallery (ensures consistency)
+                    body_feat = body_features[i]
+                    final_features.append(body_feat)
+                    
+                    # Extract face embedding SEPARATELY for face_gallery
+                    # This allows face-to-face matching without polluting body embeddings
+                    if face_extractor and settings.use_face_reid:
                         try:
-                            face_emb, _, _ = face_extractor.extract_from_person_crop(crop)
-                            fused = create_fused_embedding(
-                                body_features[i],
-                                face_emb,
-                                face_weight=settings.face_weight,
-                                body_weight=settings.body_weight,
-                            )
-                            fused_features.append(fused)
+                            f_emb, f_bbox, f_conf = face_extractor.extract_from_person_crop(crop)
+                            if f_emb is not None and f_conf > 0.5:
+                                face_embeddings[i] = f_emb
                         except Exception:
-                            fused_features.append(body_features[i])
-                    features = np.array(fused_features)
-                else:
-                    features = body_features
+                            pass
+                
+                features = final_features
+        
+        # Store face embeddings for later (will be added to face_gallery in stream_processor)
         
         # 3. Predict and update tracker
         state.tracker.predict()

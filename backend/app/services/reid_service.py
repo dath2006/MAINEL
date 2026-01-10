@@ -130,6 +130,21 @@ class ReIDService:
             if final_embedding is not None:
                 info.embedding = final_embedding
     
+    # Two-threshold system for confident identity matching
+    # Values are loaded from config (settings.reid_confirm_threshold, settings.reid_new_identity_threshold)
+    # - confirm_threshold: Must exceed this for confident match to existing ID
+    # - new_identity_threshold: Below this, definitely create new ID
+    
+    @property
+    def CONFIRM_THRESHOLD(self):
+        """High bar for 'same person' confidence. Configurable via REID_CONFIRM_THRESHOLD."""
+        return settings.reid_confirm_threshold
+    
+    @property
+    def NEW_IDENTITY_THRESHOLD(self):
+        """Below this = definitely new person. Configurable via REID_NEW_IDENTITY_THRESHOLD."""
+        return settings.reid_new_identity_threshold
+    
     async def match_identity(
         self,
         camera_id: int,
@@ -139,6 +154,11 @@ class ReIDService:
     ) -> MatchResult:
         """
         Match detection to existing global identity.
+        
+        Uses two-threshold system to prevent false merges:
+        - similarity >= CONFIRM_THRESHOLD: Confident match, update gallery
+        - similarity < NEW_IDENTITY_THRESHOLD: Create new identity
+        - Between: Create new identity (conservative approach to prevent pollution)
         
         Args:
             camera_id: Camera where detection occurred
@@ -153,15 +173,22 @@ class ReIDService:
         self._clean_expired(timestamp)
         
         # Get candidate matches from visual matcher
-        visual_matches = self.visual_matcher.match(embedding, top_k=top_k)
+        # Use lower threshold for initial candidates, we'll filter ourselves
+        visual_matches = self.visual_matcher.match(
+            embedding, 
+            top_k=top_k, 
+            threshold=settings.reid_candidate_threshold  # Get more candidates, filter with CONFIRM_THRESHOLD
+        )
         
         if not visual_matches:
-            # No matches, create new identity
+            # No matches at all, create new identity
+            logger.debug("ReID: No gallery matches found, creating new identity")
             return self._create_new_identity(camera_id, embedding, timestamp)
         
         # Score candidates with spatial-temporal constraints
         best_match = None
         best_score = -1
+        best_raw_sim = -1  # Track raw cosine similarity separately
         
         for global_id, visual_sim, entry in visual_matches:
             # Calculate ST probability
@@ -171,16 +198,15 @@ class ReIDService:
             if time_delta < 0:
                 continue  # Skip if timestamp is before last seen
             
-            # For same camera, ST probability should be high (no travel time needed)
+            # For same camera, ST probability should be high
             if from_camera == camera_id:
-                st_prob = 1.0  # Same camera = immediate match is valid
+                st_prob = 1.0
             else:
                 st_prob = self.st_scorer.calculate_score(
                     from_camera, camera_id, time_delta
                 )
             
-            # Joint score: weight visual more heavily since ST may not be configured
-            # If cameras not registered, st_prob defaults to low - don't penalize
+            # Joint score for ranking
             joint = visual_sim * 0.8 + st_prob * 0.2
             
             logger.debug(
@@ -190,15 +216,28 @@ class ReIDService:
             
             if joint > best_score:
                 best_score = joint
+                best_raw_sim = visual_sim
                 best_match = (global_id, visual_sim, st_prob, joint)
         
-        # Use visual threshold for matching (not joint)
-        if best_match and best_match[1] >= self.match_threshold:
-            global_id, visual_sim, st_prob, joint = best_match
-            
+        # === TWO-THRESHOLD DECISION LOGIC ===
+        # Use raw visual similarity for threshold decisions (not reranked joint score)
+        
+        if best_match is None:
+            logger.debug("ReID: No valid candidates after ST filtering")
+            return self._create_new_identity(camera_id, embedding, timestamp)
+        
+        global_id, visual_sim, st_prob, joint = best_match
+        
+        # Case 1: CONFIDENT MATCH (visual_sim >= CONFIRM_THRESHOLD)
+        if visual_sim >= self.CONFIRM_THRESHOLD:
+            # High confidence - this IS the same person
             # Update gallery with new observation
             self.visual_matcher.add_to_gallery(
-                global_id, embedding, camera_id, timestamp
+                global_id, 
+                embedding, 
+                camera_id, 
+                timestamp,
+                quality_score=visual_sim
             )
             
             # Update ST scorer TTD for cross-camera transitions
@@ -213,7 +252,7 @@ class ReIDService:
                 )
             
             logger.info(
-                f"ReID match: {global_id[:8]} (visual={visual_sim:.3f}, "
+                f"ReID CONFIRMED match: {global_id[:8]} (visual={visual_sim:.3f}, "
                 f"st={st_prob:.3f}, joint={joint:.3f})"
             )
             
@@ -225,7 +264,23 @@ class ReIDService:
                 is_new=False,
             )
         
-        # No confident match, create new identity
+        # Case 2: LOW SIMILARITY (visual_sim < NEW_IDENTITY_THRESHOLD)
+        # Definitely a new person
+        if visual_sim < self.NEW_IDENTITY_THRESHOLD:
+            logger.debug(
+                f"ReID: Best match {global_id[:8]} too weak ({visual_sim:.3f} < {self.NEW_IDENTITY_THRESHOLD}), "
+                f"creating new identity"
+            )
+            return self._create_new_identity(camera_id, embedding, timestamp)
+        
+        # Case 3: UNCERTAIN (between thresholds)
+        # Conservative approach: Create new identity to avoid polluting gallery
+        # Better to have duplicate IDs than merged incorrect IDs
+        logger.info(
+            f"ReID UNCERTAIN: Best match {global_id[:8]} similarity {visual_sim:.3f} "
+            f"is between thresholds [{self.NEW_IDENTITY_THRESHOLD}, {self.CONFIRM_THRESHOLD}]. "
+            f"Creating new identity to prevent potential gallery pollution."
+        )
         return self._create_new_identity(camera_id, embedding, timestamp)
     
     def _create_new_identity(
@@ -240,7 +295,8 @@ class ReIDService:
         global_id = uuid4()
         
         self.visual_matcher.add_to_gallery(
-            str(global_id), embedding, camera_id, timestamp
+            str(global_id), embedding, camera_id, timestamp,
+            quality_score=0.5  # Default quality for new identity
         )
         
         logger.info(f"Created new identity: {global_id}")
@@ -267,6 +323,7 @@ class ReIDService:
         image_bytes: bytes,
         top_k: int = 5,
         threshold: float = None,  # Will use self.match_threshold if None
+        mode: str = "auto",
     ) -> List[Dict]:
         """
         Search for a person in the gallery using an uploaded image.
@@ -334,63 +391,117 @@ class ReIDService:
         # Determine which embedding(s) to use and search method
         all_matches = []
         
-        if face_embedding is not None and body_embedding is not None:
-            # Fuse face + body embeddings
-            from app.core.features.face_extractor import create_fused_embedding
-            from app.config import settings
-            embedding = create_fused_embedding(
-                body_embedding, face_embedding,
-                face_weight=settings.face_weight,
-                body_weight=settings.body_weight,
-            )
-            logger.info("Using fused face+body embedding for search")
-            # Search main gallery
-            all_matches = self.visual_matcher.match(embedding, top_k=top_k)
-            
-        elif face_embedding is not None:
-            # Face-only image - search BOTH face gallery and main gallery
-            logger.info("Using face-only embedding for search (checking face gallery)")
-            
-            # 1. Search face gallery first (best for face-only matches)
-            face_matches = self.visual_matcher.match_face(face_embedding, top_k=top_k, threshold=threshold)
-            for gid, score, entry in face_matches:
-                all_matches.append((gid, score, entry))
-            
-            # 2. Also search main gallery (fused embeddings) with lower weight
-            main_matches = self.visual_matcher.match(face_embedding, top_k=top_k)
-            for gid, score, entry in main_matches:
-                # Avoid duplicates, boost if already found in face gallery
-                existing = next((m for m in all_matches if m[0] == gid), None)
-                if existing:
-                    # Already in face matches, keep higher score
-                    pass
-                else:
-                    all_matches.append((gid, score * 0.8, entry))  # Discount main gallery matches
-            
-            # Re-sort by score
-            all_matches.sort(key=lambda x: x[1], reverse=True)
-            all_matches = all_matches[:top_k]
-            
-        elif body_embedding is not None:
-            # Body-only - use body embedding
-            embedding = body_embedding
-            logger.info("Using body-only embedding for search")
-            all_matches = self.visual_matcher.match(embedding, top_k=top_k)
-        else:
-            raise ValueError("Failed to extract any features from image")
+        # Log gallery state before search
+        gallery_size = self.visual_matcher.gallery_size
+        face_gallery_size = len(self.visual_matcher.face_gallery)
+        logger.info(f"=== IMAGE SEARCH: Gallery has {gallery_size} identities, {face_gallery_size} face embeddings ===")
         
+        if gallery_size == 0:
+            logger.warning("Gallery is EMPTY - no identities to search against")
+            return []
+        
+        # Mode-based Search Logic
+        if mode == "face":
+            if face_embedding is None:
+                logger.warning("Search Mode=FACE but no face detected in query image.")
+                return []
+            
+            logger.info("Search Mode: FACE ONLY")
+            # Search face gallery directly
+            all_matches = self.visual_matcher.match_face(face_embedding, top_k=top_k, threshold=0.0)
+            
+        elif mode == "body":
+            if body_embedding is None:
+                 logger.warning("Search Mode=BODY but no person body detected.")
+                 return []
+            
+            logger.info("Search Mode: BODY ONLY")
+            # Search main gallery using body embedding (strict body-to-body/fused match)
+            all_matches = self.visual_matcher.match(body_embedding, top_k=top_k, threshold=0.0)
+            
+        else:
+            # Mode = "auto" (Default Legacy Logic)
+            if face_embedding is not None and body_embedding is not None:
+                # Gallery is now body-only, so use body embedding for main search
+                # Face is used as a bonus boost via face_gallery
+                logger.info("Search: AUTO (Body Search + Face Boost)")
+                
+                # Primary search: body-only against main gallery
+                all_matches = self.visual_matcher.match(body_embedding, top_k=top_k * 2, threshold=0.0)
+                
+                # Bonus: Check face gallery for face-to-face matches
+                if len(self.visual_matcher.face_gallery) > 0:
+                    logger.info(f"Checking face gallery ({len(self.visual_matcher.face_gallery)} faces)...")
+                    face_matches = self.visual_matcher.match_face(face_embedding, top_k=top_k, threshold=0.3)
+                    
+                    # Boost scores for identities that also match by face
+                    face_match_ids = {gid: score for gid, score, _ in face_matches}
+                    boosted_matches = []
+                    for gid, score, entry in all_matches:
+                        if gid in face_match_ids:
+                            # Boost by combining body + face scores
+                            face_score = face_match_ids[gid]
+                            boosted = score * 0.7 + face_score * 0.3  # Weight body more
+                            logger.info(f"  Face boost: {gid[:8]}... body={score:.3f} + face={face_score:.3f} = {boosted:.3f}")
+                            boosted_matches.append((gid, boosted, entry))
+                        else:
+                            boosted_matches.append((gid, score, entry))
+                    
+                    # Re-sort by boosted score
+                    boosted_matches.sort(key=lambda x: x[1], reverse=True)
+                    all_matches = boosted_matches[:top_k]
+                else:
+                    all_matches = all_matches[:top_k]
+                
+            elif face_embedding is not None:
+                # Face-only image - search face gallery primarily
+                logger.info("Search: AUTO (Face Only)")
+                
+                # Search face gallery
+                face_matches = self.visual_matcher.match_face(face_embedding, top_k=top_k, threshold=0.0)
+                for gid, score, entry in face_matches:
+                    all_matches.append((gid, score, entry))
+                
+                # If not enough matches, also try main gallery (body)
+                if len(all_matches) < top_k:
+                    main_matches = self.visual_matcher.match(face_embedding, top_k=top_k, threshold=0.0)
+                    for gid, score, entry in main_matches:
+                        if not any(m[0] == gid for m in all_matches):
+                            all_matches.append((gid, score * 0.5, entry))  # Heavy discount
+                    
+                    all_matches.sort(key=lambda x: x[1], reverse=True)
+                    all_matches = all_matches[:top_k]
+                
+            elif body_embedding is not None:
+                # Body-only - use body embedding
+                embedding = body_embedding
+                logger.info("Search: AUTO (Body Only)")
+                # Search with threshold=0.0 to get ALL candidates for logging
+                all_matches = self.visual_matcher.match(embedding, top_k=top_k, threshold=0.0)
+            else:
+                raise ValueError("Failed to extract any features from image")
+        
+        # Apply threshold and build results
+        search_threshold = threshold if threshold is not None else self.match_threshold
         results = []
-        for item in all_matches:
+        
+        logger.info(f"=== FINAL RESULTS (search_threshold={search_threshold}) ===")
+        for i, item in enumerate(all_matches):
             global_id, score = item[0], item[1]
             entry = item[2] if len(item) > 2 else None
-            logger.info(f"Search candidate: {global_id} score={score:.4f} threshold={threshold}")
-            if score >= threshold:
+            
+            if score >= search_threshold:
+                logger.info(f"  ✓ MATCH #{len(results)+1}: {global_id[:8]}... score={score:.4f} >= {search_threshold}")
                 results.append({
                     "global_track_id": global_id,
                     "score": score,
                     "last_seen": entry.last_seen,
                     "camera_sequence": entry.camera_history if entry.camera_history else [entry.last_camera_id],
                 })
+            else:
+                logger.info(f"  ✗ REJECTED: {global_id[:8]}... score={score:.4f} < {search_threshold}")
+        
+        logger.info(f"=== Search complete: {len(results)} matches returned ===")
         
         return results
     

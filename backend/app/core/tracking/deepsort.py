@@ -350,7 +350,7 @@ class DeepSORTTracker:
         self,
         track_indices: List[int],
         detections: List[Detection],
-        features: Optional[np.ndarray],
+        features: Optional[List[Optional[np.ndarray]]],
     ) -> Tuple[List[Tuple[int, int]], List[int], List[int]]:
         """Cascade matching by track age."""
         if len(track_indices) == 0 or len(detections) == 0:
@@ -374,15 +374,25 @@ class DeepSORTTracker:
             if len(track_indices_at_level) == 0:
                 continue
             
+            # Filter for detections that actually have features (Quality Gate passed)
+            valid_det_indices = [d for d in unmatched_detections if features[d] is not None]
+            
+            # If no valid features at this level, continue (detections remain unmatched)
+            if not valid_det_indices:
+                continue
+
             # Build cost matrix using appearance features
-            feat = features[unmatched_detections]
+            # features is a List, so we must build array manually
+            current_features_list = [features[d] for d in valid_det_indices]
+            feat = np.array(current_features_list)
+            
             targets = np.array([self.tracks[k].track_id for k in track_indices_at_level])
             cost_matrix = self.metric.distance(feat, targets)
             
             # Apply gating based on Mahalanobis distance
             for i, track_idx in enumerate(track_indices_at_level):
                 measurements = np.array([
-                    detections[d].to_xyah() for d in unmatched_detections
+                    detections[d].to_xyah() for d in valid_det_indices
                 ])
                 gating_distance = self.kf.gating_distance(
                     self.tracks[track_idx].mean,
@@ -400,7 +410,10 @@ class DeepSORTTracker:
             for row, col in zip(row_indices, col_indices):
                 if cost_matrix[row, col] >= 1e10:
                     continue
-                matches.append((track_indices_at_level[col], unmatched_detections[row]))
+                
+                # row index corresponds to valid_det_indices[row]
+                true_det_idx = valid_det_indices[row]
+                matches.append((track_indices_at_level[col], true_det_idx))
             
             matched_detections = set([m[1] for m in matches if m[0] in track_indices_at_level])
             unmatched_detections = [d for d in unmatched_detections if d not in matched_detections]

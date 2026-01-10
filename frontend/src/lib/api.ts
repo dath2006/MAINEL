@@ -113,10 +113,10 @@ export const streamsApi = {
 
 export const tracksApi = {
   listActive: () => fetchJson<GlobalTrack[]>('/tracks/active'),
-  searchByImage: async (file: File, limit: number = 5): Promise<SearchResult[]> => {
+  searchByImage: async (file: File, limit: number = 5, mode: 'auto' | 'face' | 'body' = 'auto'): Promise<SearchResult[]> => {
     const formData = new FormData();
     formData.append('file', file);
-    const res = await fetch(`${API_BASE}/tracks/search/image?limit=${limit}`, {
+    const res = await fetch(`${API_BASE}/tracks/search/image?limit=${limit}&mode=${mode}`, {
         method: 'POST',
         body: formData,
     });

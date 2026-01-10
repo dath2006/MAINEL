@@ -573,6 +573,202 @@ class YOLODetector:
         return crops
 
 
+class YOLOv10Detector:
+    """
+    YOLOv10-based person detector with NMS-Free One-to-One matching.
+    
+    YOLOv10 eliminates the need for Non-Maximum Suppression (NMS) through
+    its one-to-one matching head, resulting in significantly faster inference.
+    This is particularly beneficial for real-time applications.
+    
+    Key advantages over YOLOv8:
+    - No NMS post-processing overhead (15-20x faster end-to-end)
+    - More stable bounding boxes (less "flicker")
+    - Better for tracking applications (cleaner detections)
+    
+    Attributes:
+        model: The YOLOv10 model instance
+        confidence: Detection confidence threshold
+        device: Compute device ('cuda' or 'cpu')
+    """
+    
+    PERSON_CLASS_ID = 0  # COCO person class
+    
+    def __init__(
+        self,
+        model_path: str = "yolov10n.pt",
+        confidence: float = 0.5,
+        device: Optional[str] = None,
+    ):
+        """
+        Initialize YOLOv10 detector.
+        
+        Args:
+            model_path: Path to YOLOv10 weights file or model name
+                       ('yolov10n', 'yolov10s', 'yolov10m', 'yolov10b', 'yolov10l', 'yolov10x')
+            confidence: Detection confidence threshold (0-1)
+            device: Compute device ('cuda', 'cpu', or None for auto)
+        """
+        if not ULTRALYTICS_AVAILABLE:
+            raise ImportError("ultralytics package is required for YOLOv10 detector")
+        
+        self.confidence = confidence
+        
+        # Auto-detect device
+        if device is None:
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        else:
+            self.device = device
+        
+        logger.info(f"Loading YOLOv10 model from {model_path} on {self.device}")
+        
+        # Load YOLOv10 model (uses same YOLO class from ultralytics)
+        # YOLOv10 models: yolov10n, yolov10s, yolov10m, yolov10b, yolov10l, yolov10x
+        self.model = YOLO(model_path)
+        self.model.to(self.device)
+        
+        # Warm up the model
+        self._warmup()
+        
+        logger.info(f"YOLOv10 NMS-Free detector initialized (confidence={confidence}, device={self.device})")
+    
+    def _warmup(self):
+        """Warm up the model with a dummy inference."""
+        dummy_input = np.zeros((640, 640, 3), dtype=np.uint8)
+        _ = self.model.predict(
+            dummy_input,
+            verbose=False,
+            conf=self.confidence,
+            classes=[self.PERSON_CLASS_ID],
+        )
+        logger.debug("YOLOv10 model warmup complete")
+    
+    def detect(
+        self,
+        frame: np.ndarray,
+        confidence: Optional[float] = None,
+    ) -> List[Detection]:
+        """
+        Detect persons in a single frame using NMS-free inference.
+        
+        YOLOv10's one-to-one matching produces clean detections without
+        the need for NMS post-processing, making it faster and more stable.
+        
+        Args:
+            frame: Input frame as numpy array (H, W, C) in BGR format
+            confidence: Override default confidence threshold
+            
+        Returns:
+            List of Detection objects for detected persons
+        """
+        conf = confidence if confidence is not None else self.confidence
+        
+        # YOLOv10 inference - no NMS needed!
+        # The model's one-to-one matching head handles duplicate suppression internally
+        results = self.model.predict(
+            frame,
+            verbose=False,
+            conf=conf,
+            classes=[self.PERSON_CLASS_ID],  # Only detect persons
+            # Note: No iou parameter needed - YOLOv10 is NMS-free
+        )
+        
+        detections = []
+        if len(results) > 0 and results[0].boxes is not None:
+            boxes = results[0].boxes
+            for i in range(len(boxes)):
+                x1, y1, x2, y2 = boxes.xyxy[i].cpu().numpy()
+                conf_score = float(boxes.conf[i].cpu().numpy())
+                class_id = int(boxes.cls[i].cpu().numpy())
+                
+                detections.append(Detection(
+                    bbox=(float(x1), float(y1), float(x2), float(y2)),
+                    confidence=conf_score,
+                    class_id=class_id,
+                ))
+        
+        return detections
+    
+    def detect_batch(
+        self,
+        frames: List[np.ndarray],
+        confidence: Optional[float] = None,
+    ) -> List[List[Detection]]:
+        """
+        Detect persons in multiple frames (batch inference).
+        
+        Args:
+            frames: List of input frames
+            confidence: Override default confidence threshold
+            
+        Returns:
+            List of detection lists, one per frame
+        """
+        conf = confidence if confidence is not None else self.confidence
+        
+        results = self.model.predict(
+            frames,
+            verbose=False,
+            conf=conf,
+            classes=[self.PERSON_CLASS_ID],
+        )
+        
+        all_detections = []
+        for result in results:
+            frame_detections = []
+            if result.boxes is not None:
+                boxes = result.boxes
+                for i in range(len(boxes)):
+                    x1, y1, x2, y2 = boxes.xyxy[i].cpu().numpy()
+                    conf_score = float(boxes.conf[i].cpu().numpy())
+                    class_id = int(boxes.cls[i].cpu().numpy())
+                    
+                    frame_detections.append(Detection(
+                        bbox=(float(x1), float(y1), float(x2), float(y2)),
+                        confidence=conf_score,
+                        class_id=class_id,
+                    ))
+            all_detections.append(frame_detections)
+        
+        return all_detections
+    
+    def crop_detections(
+        self,
+        frame: np.ndarray,
+        detections: List[Detection],
+        padding: float = 0.1,
+    ) -> List[np.ndarray]:
+        """
+        Crop detected persons from frame.
+        
+        Args:
+            frame: Original frame
+            detections: List of detections
+            padding: Padding ratio around bounding box
+            
+        Returns:
+            List of cropped person images
+        """
+        h, w = frame.shape[:2]
+        crops = []
+        
+        for det in detections:
+            # Add padding
+            pad_w = det.width * padding
+            pad_h = det.height * padding
+            
+            x1 = int(max(0, det.x1 - pad_w))
+            y1 = int(max(0, det.y1 - pad_h))
+            x2 = int(min(w, det.x2 + pad_w))
+            y2 = int(min(h, det.y2 + pad_h))
+            
+            crop = frame[y1:y2, x1:x2]
+            if crop.size > 0:
+                crops.append(crop)
+        
+        return crops
+
+
 def export_yolo_to_onnx(
     pt_path: str = "yolov8n.pt",
     onnx_path: Optional[str] = None,
@@ -610,7 +806,7 @@ def export_yolo_to_onnx(
 
 
 # Lazy singleton instance
-_detector_instance: Optional[Union[YOLODetector, YOLOOnnxDetector]] = None
+_detector_instance: Optional[Union[YOLODetector, YOLOOnnxDetector, YOLOv10Detector]] = None
 
 
 def get_detector(
@@ -619,28 +815,61 @@ def get_detector(
     iou_threshold: float = 0.45,
     device: Optional[str] = None,
     use_onnx: bool = True,
-) -> Union[YOLODetector, YOLOOnnxDetector]:
+    yolo_version: str = "auto",
+) -> Union[YOLODetector, YOLOOnnxDetector, YOLOv10Detector]:
     """
     Get or create singleton detector instance.
     
-    Automatically selects ONNX backend if:
-    1. use_onnx is True
-    2. Model path ends with .onnx
-    3. ONNX Runtime is available
+    Automatically selects the best detector based on:
+    1. yolo_version parameter ('v8', 'v10', or 'auto')
+    2. Model filename (yolov10*.pt -> YOLOv10Detector)
+    3. ONNX availability for v8 models
     
-    Falls back to PyTorch backend otherwise.
+    YOLOv10 is preferred when available as it's NMS-free and faster.
+    
+    Args:
+        model_path: Path to YOLO weights file
+        confidence: Detection confidence threshold
+        iou_threshold: NMS IoU threshold (ignored for YOLOv10)
+        device: Compute device
+        use_onnx: Use ONNX backend for v8 if available
+        yolo_version: 'v8', 'v10', or 'auto' (detect from filename)
+    
+    Returns:
+        Detector instance (YOLOv10Detector, YOLOOnnxDetector, or YOLODetector)
     """
     global _detector_instance
     
     if _detector_instance is None:
+        import os
+        
+        # Auto-detect YOLO version from filename
+        model_basename = os.path.basename(model_path).lower()
+        is_v10 = 'yolov10' in model_basename or 'v10' in model_basename
         is_onnx_model = model_path.endswith('.onnx')
         
-        # Prefer ONNX if available and requested
+        # Override auto-detection if explicitly specified
+        if yolo_version == "v10":
+            is_v10 = True
+        elif yolo_version == "v8":
+            is_v10 = False
+        # else: "auto" - use detected value
+        
+        # YOLOv10 path - NMS-Free, faster
+        if is_v10 and ULTRALYTICS_AVAILABLE and not is_onnx_model:
+            logger.info("Using YOLOv10 NMS-Free detector (faster)")
+            _detector_instance = YOLOv10Detector(
+                model_path=model_path,
+                confidence=confidence,
+                device=device,
+            )
+            return _detector_instance
+        
+        # YOLOv8 ONNX path
         if (use_onnx or is_onnx_model) and ONNX_AVAILABLE:
             if not is_onnx_model:
                 # Try to find ONNX version of the model
                 onnx_path = model_path.replace('.pt', '.onnx')
-                import os
                 if os.path.exists(onnx_path):
                     model_path = onnx_path
                     is_onnx_model = True
@@ -657,9 +886,9 @@ def get_detector(
                 )
                 return _detector_instance
         
-        # Fallback to PyTorch
+        # Fallback to PyTorch YOLOv8
         if ULTRALYTICS_AVAILABLE:
-            logger.info("Using PyTorch/ultralytics detector")
+            logger.info("Using PyTorch/ultralytics YOLOv8 detector")
             _detector_instance = YOLODetector(
                 model_path=model_path,
                 confidence=confidence,
@@ -670,3 +899,4 @@ def get_detector(
             raise ImportError("No YOLO backend available. Install ultralytics or onnxruntime-gpu.")
     
     return _detector_instance
+

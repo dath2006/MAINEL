@@ -116,7 +116,8 @@ async def search_tracks(query: TrackSearchQuery):
 async def search_by_image(
     file: UploadFile = File(...),
     limit: int = 5,
-    threshold: float = 0.5
+    threshold: Optional[float] = Query(None, description="Similarity threshold (defaults to server config)"),
+    mode: str = Query("auto", enum=["auto", "face", "body"], description="Search mode: 'auto' (fusion), 'face' (face-only), 'body' (body-only)")
 ):
     """
     Search for a person by image.
@@ -129,7 +130,7 @@ async def search_by_image(
     
     try:
         content = await file.read()
-        matches = reid_service.search_by_image(content, top_k=limit, threshold=threshold)
+        matches = reid_service.search_by_image(content, top_k=limit, threshold=threshold, mode=mode)
         
         # Enrich results with GlobalTrack info and Camera locations
         results = []
