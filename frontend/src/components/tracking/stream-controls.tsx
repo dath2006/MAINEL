@@ -35,13 +35,13 @@ export function StreamControls({
   };
 
   return (
-    <Card>
-      <CardContent className="flex flex-wrap items-center justify-between gap-4 p-4">
+
+      <div className="flex flex-wrap items-center justify-between gap-4 border-2 p-2 rounded-lg">
         {/* Playback Controls */}
         <div className="flex items-center gap-2">
           {state === 'playing' ? (
             <Button variant="outline" size="sm" onClick={onPause}>
-              <Pause className="mr-2 h-4 w-4" />
+              <Pause className="mr-2 h-4 w-4 " />
               Pause
             </Button>
           ) : (
@@ -86,7 +86,7 @@ export function StreamControls({
           </div>
           <span className="w-8 text-sm font-medium">{targetFps}</span>
         </div>
-      </CardContent>
-    </Card>
+      </div>
+
   );
 }
