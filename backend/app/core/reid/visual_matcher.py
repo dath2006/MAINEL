@@ -192,7 +192,7 @@ class VisualMatcher:
             Tuple of (list of IDs, embeddings array of shape (N, D))
         """
         if not self.gallery:
-            return [], np.empty((0, 512))
+            return [], np.empty((0, 256))  # NVIDIA ReID embedding dimension
         
         ids = list(self.gallery.keys())
         embeddings = np.array([self.gallery[id].embedding for id in ids])

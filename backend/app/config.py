@@ -59,19 +59,44 @@ class Settings(BaseSettings):
         description="YOLO NMS IoU threshold"
     )
     
+    # FastReID Settings (SOTA ReID) - Using BoT R50-ibn for better generalization
+    fastreid_config_path: str = Field(
+        default="fastreid_lib/configs/Market1501/bagtricks_R50-ibn.yml",
+        description="Path to FastReID config YAML"
+    )
+    fastreid_weights_path: str = Field(
+        default="model_weights/market_bot_R50-ibn.pth",
+        description="Path to FastReID pretrained weights"
+    )
+    fastreid_onnx_path: Optional[str] = Field(
+        default="model_weights/fastreid_bot_R50-ibn.onnx",
+        description="Path to FastReID ONNX model"
+    )
+    
+    # NVIDIA TAO ReID Settings (Preferred)
+    nvidia_reid_onnx_path: str = Field(
+        default="model_weights/resnet50_market1501_aicity156.onnx",
+        description="Path to NVIDIA TAO ReIdentificationNet ONNX model"
+    )
+    use_nvidia_reid: bool = Field(
+        default=True,
+        description="Use NVIDIA TAO model for ReID (recommended)"
+    )
+
+    # OSNet (Legacy) Settings
     osnet_model_path: Optional[str] = Field(
         default=None,
-        description="Path to OSNet model weights (None for auto-download)"
+        description="Path to OSNet model weights (fallback if FastReID/NVIDIA unavailable)"
     )
     reid_embedding_dim: int = Field(
-        default=512,
-        description="Dimension of ReID feature embeddings"
+        default=256,  # Changed from 2048/512 for NVIDIA model
+        description="Dimension of ReID feature embeddings (256 for NVIDIA, 2048 for FastReID)"
     )
     reid_match_threshold: float = Field(
-        default=0.3,  # Lowered from 0.4 for better cross-camera matching
+        default=0.45,  # Adjusted for NVIDIA model (0.45=Low, 0.65=Medium, 0.80=High)
         ge=0.0,
         le=1.0,
-        description="Cosine similarity threshold for ReID matching (lower = more lenient)"
+        description="Cosine similarity threshold for ReID matching"
     )
     
     # Tracking
@@ -124,23 +149,7 @@ class Settings(BaseSettings):
         description="GPU memory limit for ONNX Runtime in GB"
     )
     
-    # Face ReID Settings (Multi-Modal)
-    use_face_reid: bool = Field(
-        default=True,
-        description="Enable face+body multi-modal ReID matching"
-    )
-    face_weight: float = Field(
-        default=0.4,
-        ge=0.0,
-        le=1.0,
-        description="Weight for face embedding in fusion (body_weight = 1 - face_weight)"
-    )
-    body_weight: float = Field(
-        default=0.6,
-        ge=0.0,
-        le=1.0,
-        description="Weight for body embedding in fusion"
-    )
+    # Thumbnail Settings
     min_thumbnail_quality: float = Field(
         default=0.3,
         ge=0.0,

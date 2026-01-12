@@ -45,7 +45,6 @@ class TrackingService:
     ):
         self.detector = detector
         self.extractor = extractor
-        self.face_extractor = None  # Lazy loaded
         
         # Per-camera state
         self.camera_states: Dict[int, CameraState] = {}
@@ -78,30 +77,20 @@ class TrackingService:
     def _get_extractor(self) -> OSNetExtractor:
         """Lazy load extractor."""
         if self.extractor is None:
-            # Prefer ONNX path if use_onnx is enabled and ONNX model exists
             import os
-            model_path = settings.osnet_model_path
-            if settings.use_onnx and settings.osnet_onnx_path:
-                if os.path.exists(settings.osnet_onnx_path):
-                    model_path = settings.osnet_onnx_path
-            
+            model_path = None
+            # Prefer NVIDIA TAO model
+            if settings.use_nvidia_reid and settings.nvidia_reid_onnx_path:
+                if os.path.exists(settings.nvidia_reid_onnx_path):
+                     model_path = settings.nvidia_reid_onnx_path
+
             self.extractor = get_extractor(
                 model_path=model_path,
                 device=settings.device,
                 use_onnx=settings.use_onnx,
+                use_nvidia=settings.use_nvidia_reid,
             )
         return self.extractor
-    
-    def _get_face_extractor(self):
-        """Lazy load face extractor."""
-        if self.face_extractor is None:
-            try:
-                from app.core.features.face_extractor import get_face_extractor
-                self.face_extractor = get_face_extractor(device=settings.device)
-            except Exception as e:
-                logger.warning(f"Face extractor unavailable: {e}")
-                self.face_extractor = False  # Mark as unavailable
-        return self.face_extractor if self.face_extractor else None
     
     def _get_camera_state(self, camera_id: int) -> CameraState:
         """Get or create camera state."""
@@ -135,35 +124,14 @@ class TrackingService:
         # 1. Detection
         detections = detector.detect(frame)
         
-        # 2. Feature extraction (if enabled)
+        # 2. Feature extraction using FastReID (if enabled)
         features = None
         if extract_features and len(detections) > 0:
             extractor = self._get_extractor()
-            face_extractor = self._get_face_extractor()
             crops = detector.crop_detections(frame, detections)
             if crops:
-                # Extract body features
-                body_features = extractor.extract_batch(crops)
-                
-                # Extract face features and fuse if available
-                if face_extractor and settings.use_face_reid:
-                    from app.core.features.face_extractor import create_fused_embedding
-                    fused_features = []
-                    for i, crop in enumerate(crops):
-                        try:
-                            face_emb, _, _ = face_extractor.extract_from_person_crop(crop)
-                            fused = create_fused_embedding(
-                                body_features[i],
-                                face_emb,
-                                face_weight=settings.face_weight,
-                                body_weight=settings.body_weight,
-                            )
-                            fused_features.append(fused)
-                        except Exception:
-                            fused_features.append(body_features[i])
-                    features = np.array(fused_features)
-                else:
-                    features = body_features
+                # Extract body features using FastReID
+                features = extractor.extract_batch(crops)
         
         # 3. Predict and update tracker
         state.tracker.predict()

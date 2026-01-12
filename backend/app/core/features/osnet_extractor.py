@@ -656,60 +656,96 @@ def get_extractor(
     model_path: Optional[str] = None,
     device: Optional[str] = None,
     use_onnx: bool = True,
+    use_fastreid: bool = False,  # Disabled by default
+    use_nvidia: bool = True,   # Default to NVIDIA model
 ):
     """
     Get or create singleton extractor instance.
     
-    Automatically selects ONNX backend if:
-    1. use_onnx is True
-    2. model_path ends with .onnx
-    3. ONNX Runtime is available
-    
-    Falls back to PyTorch OSNet, then ResNet18.
+    Priority order:
+    1. NVIDIA TAO (if use_nvidia=True and model exists)
+    2. FastReID (if use_fastreid=True and available)
+    3. ONNX OSNet (if use_onnx=True and available)
+    4. PyTorch OSNet
+    5. ResNet18 fallback
     """
     global _extractor_instance
     
-    if _extractor_instance is None:
-        is_onnx_model = model_path is not None and model_path.endswith('.onnx')
-        
-        # Prefer ONNX if available and requested
-        if (use_onnx or is_onnx_model) and ONNX_AVAILABLE:
-            if not is_onnx_model and model_path:
-                # Try to find ONNX version of the model
-                onnx_path = model_path.replace('.pth', '.onnx').replace('.pt', '.onnx')
-                import os
-                if os.path.exists(onnx_path):
-                    model_path = onnx_path
-                    is_onnx_model = True
-            elif not is_onnx_model:
-                # Check default ONNX path
-                default_onnx = f"model_weights/{model_name}.onnx"
-                import os
-                if os.path.exists(default_onnx):
-                    model_path = default_onnx
-                    is_onnx_model = True
+    if _extractor_instance is not None:
+        return _extractor_instance
+    
+    import os
+    
+    # Priority 1: NVIDIA TAO ReID (New Standard)
+    if use_nvidia:
+        try:
+            from app.core.features.nvidia_reid_extractor import get_nvidia_extractor, NvidiaReIDExtractor
+            # We can instantiate directly since we have the class import
+            # Check default path from settings if not provided
+            if not model_path:
+                 # Standard path for this project
+                 model_path = "model_weights/resnet50_market1501_aicity156.onnx"
             
-            if is_onnx_model and model_path:
-                logger.info("Using ONNX Runtime OSNet with CUDA EP")
-                _extractor_instance = OSNetOnnxExtractor(
+            if os.path.exists(model_path):
+                logger.info("Using NVIDIA TAO ReID extractor")
+                _extractor_instance = NvidiaReIDExtractor(
                     model_path=model_path,
                     device=device,
                 )
                 return _extractor_instance
+        except Exception as e:
+            logger.warning(f"NVIDIA ReID not available, falling back: {e}")
+
+    # Priority 2: FastReID
+        try:
+            from app.core.features.fastreid_extractor import get_fastreid_extractor, FASTREID_AVAILABLE
+            if FASTREID_AVAILABLE:
+                logger.info("Attempting to load FastReID extractor (SOTA accuracy)")
+                _extractor_instance = get_fastreid_extractor(device=device, use_onnx=use_onnx)
+                return _extractor_instance
+        except Exception as e:
+            logger.warning(f"FastReID not available, falling back to OSNet: {e}")
+    
+    # Fall back to OSNet
+    is_onnx_model = model_path is not None and model_path.endswith('.onnx')
+    
+    # Prefer ONNX if available and requested
+    if (use_onnx or is_onnx_model) and ONNX_AVAILABLE:
+        if not is_onnx_model and model_path:
+            # Try to find ONNX version of the model
+            onnx_path = model_path.replace('.pth', '.onnx').replace('.pt', '.onnx')
+            if os.path.exists(onnx_path):
+                model_path = onnx_path
+                is_onnx_model = True
+        elif not is_onnx_model:
+            # Check default ONNX path
+            default_onnx = f"model_weights/{model_name}.onnx"
+            if os.path.exists(default_onnx):
+                model_path = default_onnx
+                is_onnx_model = True
         
-        # Fallback to PyTorch OSNet
-        if TORCHREID_AVAILABLE:
-            logger.info("Using PyTorch/torchreid OSNet extractor")
-            _extractor_instance = OSNetExtractor(
-                model_name=model_name,
+        if is_onnx_model and model_path:
+            logger.info("Using ONNX Runtime OSNet with CUDA EP")
+            _extractor_instance = OSNetOnnxExtractor(
                 model_path=model_path,
                 device=device,
             )
-        elif TORCH_AVAILABLE:
-            # Final fallback to ResNet18
-            logger.warning("Using ResNet18 fallback (torchreid not available)")
-            _extractor_instance = ResNet18Extractor(device=device)
-        else:
-            raise ImportError("No feature extraction backend available. Install torchreid or onnxruntime-gpu.")
+            return _extractor_instance
+    
+    # Fallback to PyTorch OSNet
+    if TORCHREID_AVAILABLE:
+        logger.info("Using PyTorch/torchreid OSNet extractor")
+        _extractor_instance = OSNetExtractor(
+            model_name=model_name,
+            model_path=model_path,
+            device=device,
+        )
+    elif TORCH_AVAILABLE:
+        # Final fallback to ResNet18
+        logger.warning("Using ResNet18 fallback (torchreid not available)")
+        _extractor_instance = ResNet18Extractor(device=device)
+    else:
+        raise ImportError("No feature extraction backend available. Install torchreid or onnxruntime-gpu.")
     
     return _extractor_instance
+

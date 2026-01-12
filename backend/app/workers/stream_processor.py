@@ -322,7 +322,7 @@ class StreamProcessor:
                         try:
                             import cv2
                             import base64
-                            from app.core.features.face_extractor import get_face_extractor, get_quality_scorer
+                            from app.core.features.face_extractor import get_quality_scorer
                             
                             bbox = track.to_tlbr()  # [x1, y1, x2, y2]
                             x1, y1, x2, y2 = map(int, bbox)
@@ -335,33 +335,9 @@ class StreamProcessor:
                             if x2 > x1 and y2 > y1:
                                 crop = frame_data.frame[y1:y2, x1:x2]
                                 
-                                # Detect face in crop for quality scoring
-                                face_extractor = get_face_extractor()
-                                face_bbox = None
-                                face_conf = 0.0
-                                face_emb = None
-                                try:
-                                    face_emb, face_bbox, face_conf = face_extractor.extract_from_person_crop(crop)
-                                    
-                                    # Store face bbox in track for visualization
-                                    if face_bbox is not None:
-                                        # Convert face bbox from crop coords to frame coords
-                                        fx1, fy1, fx2, fy2 = face_bbox
-                                        track.face_bbox = (
-                                            x1 + fx1, y1 + fy1,
-                                            x1 + fx2, y1 + fy2
-                                        )
-                                        track.face_confidence = face_conf
-                                    
-                                    # Store face embedding to face_gallery for face-based search
-                                    if face_emb is not None and face_conf > 0.5:
-                                        reid_service.visual_matcher.add_face_embedding(track.global_id, face_emb)
-                                except Exception as face_err:
-                                    logger.debug(f"Face detection error: {face_err}")
-                                
-                                # Calculate quality score
+                                # Calculate quality score (body-only now, no face detection)
                                 quality_scorer = get_quality_scorer()
-                                quality = quality_scorer.score(crop, face_bbox, face_conf)
+                                quality = quality_scorer.score(crop)
                                 
                                 # Resize to thumbnail size
                                 thumb = cv2.resize(crop, (64, 128))
