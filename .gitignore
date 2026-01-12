@@ -205,3 +205,4 @@ secrets/
 
 #Videos:
 /backend/app/videos/*
+/backend/model_weights/*.onnx
