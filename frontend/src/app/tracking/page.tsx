@@ -45,6 +45,7 @@ export default function TrackingPage() {
     source_path: '',
     source_type: 'video_file' as 'video_file' | 'webcam' | 'rtsp',
     name: '',
+    file: null as File |null,
     latitude: 0.0,
     longitude: 0.0,
   });
@@ -123,34 +124,28 @@ export default function TrackingPage() {
   const handleAddSource = async () => {
     setAddError(null);
     
-    if (!newSource.source_path.trim()) {
-      setAddError('Please enter a source path');
-      return;
-    }
-    
-    try {
-      await streamsApi.addSource({
-        camera_id: newSource.camera_id,
-        source_type: newSource.source_type,
-        source_path: newSource.source_path,
-        name: newSource.name || undefined,
-        latitude: newSource.latitude,
-        longitude: newSource.longitude,
-      });
-      setIsAddDialogOpen(false);
-      setNewSource({ 
-        camera_id: 1, 
-        source_path: '', 
-        source_type: 'video_file', 
-        name: '', 
-        latitude: 0.0, 
-        longitude: 0.0 
-      });
-      fetchData();
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Failed to add source';
-      setAddError(message);
-      console.error('Failed to add source:', error);
+    try{
+      if(newSource.source_type==='video_file' && newSource.file){
+        await streamsApi.uploadVideo({
+          camera_id:newSource.camera_id,
+          name: newSource.name,
+          file: newSource.file,
+        });
+      }else{
+        await streamsApi.addSource({
+          camera_id: newSource.camera_id,
+          source_type: newSource.source_type,
+          source_path: newSource.source_path,
+          name: newSource.name || undefined,
+          latitude: newSource.latitude,
+          longitude: newSource.longitude,
+        });
+
+        setIsAddDialogOpen(false);
+        fetchData();
+      }
+    } catch(error){
+      setAddError(error instanceof Error ? error.message : 'Failed to add source)');
     }
   };
 
@@ -206,26 +201,26 @@ export default function TrackingPage() {
       
       <main className="flex-1 space-y-4 p-6">
         {/* Debug Status Bar */}
-        <div className="flex items-center justify-between rounded bg-slate-800 p-2 text-xs text-white">
+        <div className="flex items-center justify-between rounded bg-slate-800 p-2 text-sm text-white">
           <div className="flex gap-4">
             <span>WS: <strong className={wsStatus === 'connected' ? 'text-green-400' : 'text-red-400'}>{wsStatus}</strong></span>
             <span>Frames: <strong>{frameCount}</strong></span>
             <span>Sources: <strong>{sources.length}</strong></span>
             <span>State: <strong>{status.state}</strong></span>
           </div>
-          <div className="flex flex-col items-end gap-1">
+          <div className="flex flex-col items-end gap-1 ">
             <div className="flex gap-2">
                 <Input 
                     type="file" 
                     accept="image/*" 
-                    className="h-8 w-60 text-xs text-black"
+                    className="h-9 w-55 text-xs text-gray-400 file:text-gray-400"
                     onChange={(e) => setSearchFile(e.target.files?.[0] || null)}
                 />
-                <Button size="sm" onClick={handleSearch} disabled={!searchFile || isSearching}>
+                <Button variant = "custom" onClick={handleSearch} disabled={!searchFile || isSearching}>
                     {isSearching ? 'Searching...' : 'Search Person'}
                 </Button>
             </div>
-            <div className="text-xs text-muted-foreground hidden md:block">
+            <div className="text-xs text-muted-white hidden mt-1.5 md:block">
                 Tip: Click on the map to place a camera automatically.
             </div>
           </div>
@@ -275,9 +270,9 @@ export default function TrackingPage() {
 
                         <TabsContent value="file" className="space-y-4">
                           <Input
-                            placeholder="Video file path (e.g., C:/videos/cam1.mp4)"
-                            value={newSource.source_path}
-                            onChange={(e) => setNewSource({ ...newSource, source_path: e.target.value })}
+                            type = "file"
+                            accept ="video/*" 
+                            onChange={(e) => setNewSource({ ...newSource, source_path:'' ,file: e.target.files?.[0] || null })}
                           />
                         </TabsContent>
 
@@ -387,7 +382,7 @@ export default function TrackingPage() {
                 )}
             </TabsContent>
             
-            <TabsContent value="map" className="h-[600px] w-full border rounded-lg overflow-hidden relative">
+            <TabsContent value="map" className="h-[600px] w-full border rounded-lg overflow-hidden relative z-0">
                  {/* Use MultiTrackMap for real-time updates */}
                  <MultiTrackMap 
                     sources={sources} 

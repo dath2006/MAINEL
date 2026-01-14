@@ -259,7 +259,7 @@ export default function MultiTrackMap({
             <div className={`absolute top-3 right-3 z-[1000] flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium ${
                 connected 
                     ? 'bg-green-500/20 text-green-400 border border-green-500/30' 
-                    : 'bg-zinc-700/50 text-zinc-400 border border-zinc-600/30'
+                    : 'bg-zinc-700/50 text-white border border-zinc-600/30'
             }`}>
                 <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500 animate-pulse' : 'bg-zinc-500'}`} />
                 {connected ? 'Live' : 'Offline'}
