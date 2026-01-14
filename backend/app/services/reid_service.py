@@ -326,7 +326,7 @@ class ReIDService:
         if embedding is None:
             raise ValueError("Failed to extract features from image")
         
-        logger.info("Using FastReID body embedding for search")
+        logger.info("Using configured feature extractor for search")
         
         # Search gallery
         all_matches = self.visual_matcher.match(embedding, top_k=top_k)
@@ -371,7 +371,7 @@ class ReIDService:
         """
         current_quality = self.thumbnail_quality.get(global_id, -1.0)
         
-        if quality > current_quality:
+        if quality > (current_quality * 1.02):
             self.person_thumbnails[global_id] = thumbnail_base64
             self.thumbnail_quality[global_id] = quality
             logger.debug(f"Updated thumbnail for {global_id[:8]} (quality: {current_quality:.2f} -> {quality:.2f})")

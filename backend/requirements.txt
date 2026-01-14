@@ -121,3 +121,4 @@ termcolor>=2.3.0
 faiss-cpu>=1.7.0
 prettytable>=3.9.0
 easydict>=1.10
+mediapipe>=0.10.9

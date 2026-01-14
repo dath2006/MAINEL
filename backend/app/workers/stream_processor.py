@@ -335,9 +335,10 @@ class StreamProcessor:
                             if x2 > x1 and y2 > y1:
                                 crop = frame_data.frame[y1:y2, x1:x2]
                                 
-                                # Calculate quality score (body-only now, no face detection)
+                                # Calculate quality score with confidence and pose check
                                 quality_scorer = get_quality_scorer()
-                                quality = quality_scorer.score(crop)
+                                conf = float(track.confidence) if hasattr(track, 'confidence') else 0.8
+                                quality = quality_scorer.score(crop, face_confidence=conf)
                                 
                                 # Resize to thumbnail size
                                 thumb = cv2.resize(crop, (64, 128))
