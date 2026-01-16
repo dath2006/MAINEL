@@ -5,7 +5,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Users, Trash2, RefreshCw } from "lucide-react";
+import { Users, Trash2, RefreshCw, X, Camera } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 
 const USE_MOCK = false; // for mock data: set to false later
@@ -16,6 +22,14 @@ interface PersonEntry {
     last_seen: string;
     appearance_count: number;
     thumbnail: string | null;
+}
+
+interface CaptureEntry {
+    image_b64: string;
+    quality_score: number;
+    pose: string;
+    sharpness: number;
+    timestamp: string | null;
 }
 
 const MOCK_PERSONS: PersonEntry[] = [ //for mock data
@@ -55,6 +69,32 @@ export function PersonGallery({
     const [persons, setPersons] = useState<PersonEntry[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+
+    // Popup state
+    const [selectedPerson, setSelectedPerson] = useState<string | null>(null);
+    const [captures, setCaptures] = useState<CaptureEntry[]>([]);
+    const [loadingCaptures, setLoadingCaptures] = useState(false);
+
+    // Fetch captures for a specific person
+    const fetchCaptures = async (globalId: string) => {
+        if (USE_MOCK) return; 
+        try {
+            setLoadingCaptures(true);
+            const response = await fetch(`${apiUrl}/gallery/${globalId}/captures`);
+            if (!response.ok) throw new Error("Failed to fetch captures");
+            const data = await response.json();
+            setCaptures(data.captures || []);
+        } catch (err) {
+            console.error(err);
+        } finally {
+            setLoadingCaptures(false);
+        }
+    };
+
+    const handlePersonClick = (globalId: string) => {
+        setSelectedPerson(globalId);
+        fetchCaptures(globalId);
+    };
 
     const fetchGallery = async () => {
 
@@ -151,14 +191,20 @@ export function PersonGallery({
                             No persons detected yet
                         </div>
                     ) : (
-                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3">
                             {persons.map((person) => (
                                 <div 
                                     key={person.global_id}
                                     className="border bg-card rounded-xl p-3 pt-6 flex flex-col items-center gap-2  drop-shadow-md hover:shadow-lg hover:translate-y-0.5 hover:bg-accent/20 hover:border-gray-400 transition-all "
                                 >
                                     {/* Thumbnail */}
-                                    <div className="w-40 h-40  ring-1 ring-border bg-muted rounded hover:ring-gray-300 overflow-hidden">
+                                    <div 
+                                        className="w-full aspect-[9/16] ring-1 ring-border bg-muted rounded hover:ring-primary cursor-pointer overflow-hidden relative group"
+                                        onClick={() => handlePersonClick(person.global_id)}
+                                    >
+                                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors z-10 flex items-center justify-center opacity-0 group-hover:opacity-100">
+                                            <Camera className="text-white w-8 h-8 drop-shadow-md" />
+                                        </div>
                                         {person.thumbnail ? (
                                             <img 
                                                 src={`data:image/jpeg;base64,${person.thumbnail}`}
@@ -191,6 +237,53 @@ export function PersonGallery({
                     )}
                 </ScrollArea>
             </CardContent>
+
+            {/* Captures Modal */}
+            <Dialog open={!!selectedPerson} onOpenChange={(open) => !open && setSelectedPerson(null)}>
+                <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2">
+                            <Users className="h-5 w-5" />
+                            Identity: {selectedPerson?.slice(0, 8)}
+                        </DialogTitle>
+                    </DialogHeader>
+                    
+                    {loadingCaptures ? (
+                        <div className="flex justify-center p-8">
+                            <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground" />
+                        </div>
+                    ) : captures.length === 0 ? (
+                        <div className="text-center text-muted-foreground p-8">
+                            No high-quality captures found for this identity.
+                        </div>
+                    ) : (
+                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 mt-4">
+                            {captures.map((cap, idx) => (
+                                <div key={idx} className="bg-muted rounded-lg overflow-hidden border">
+                                    <div className="aspect-[9/16] relative bg-black/5">
+                                        <img 
+                                            src={`data:image/jpeg;base64,${cap.image_b64}`}
+                                            alt={`Capture ${idx}`}
+                                            className="w-full h-full object-contain"
+                                        />
+                                        <div className="absolute top-2 right-2 flex flex-col items-end gap-1">
+                                            <Badge variant={cap.quality_score > 70 ? "default" : "secondary"}>
+                                                Q: {cap.quality_score.toFixed(0)}
+                                            </Badge>
+                                            <Badge variant="outline" className="bg-background/80">
+                                                {cap.pose}
+                                            </Badge>
+                                        </div>
+                                    </div>
+                                    <div className="p-2 text-xs text-center text-muted-foreground">
+                                        {cap.timestamp ? new Date(cap.timestamp).toLocaleTimeString() : 'Unknown time'}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </DialogContent>
+            </Dialog>
         </Card>
     );
 }

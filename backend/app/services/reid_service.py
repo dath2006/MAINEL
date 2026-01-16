@@ -47,16 +47,20 @@ class ReIDService:
     def __init__(
         self,
         match_threshold: float = None,
+        new_threshold: float = None,
         st_weight: float = None,
         max_transition_time: float = None,
     ):
         self.match_threshold = match_threshold or settings.reid_match_threshold
+        self.new_threshold = new_threshold or getattr(settings, 'reid_new_threshold', 0.50)
         self.st_weight = st_weight or settings.st_weight
         self.max_transition_time = max_transition_time or settings.max_transition_time
         
-        # Core components
+        # Core components - use new_threshold as candidate filtering threshold
+        # so match() returns candidates between new_threshold and match_threshold
         self.visual_matcher = VisualMatcher(
             match_threshold=self.match_threshold,
+            candidate_threshold=self.new_threshold * 0.8,  # Slightly lower for safety margin
         )
         self.st_scorer = SpatioTemporalScorer(
             max_transition_time=self.max_transition_time,
@@ -72,12 +76,7 @@ class ReIDService:
         # Global track counter
         self._next_global_id = 1
         
-        # Person thumbnails for gallery display (global_id -> base64 image)
-        self.person_thumbnails: Dict[str, str] = {}
-        # Quality scores for thumbnails (to update only if better quality)
-        self.thumbnail_quality: Dict[str, float] = {}
-        
-        logger.info(f"ReIDService initialized (threshold={self.match_threshold})")
+        logger.info(f"ReIDService initialized (match_thresh={self.match_threshold}, new_thresh={self.new_threshold})")
     
     def register_camera(
         self,
@@ -192,38 +191,61 @@ class ReIDService:
                 best_score = joint
                 best_match = (global_id, visual_sim, st_prob, joint)
         
-        # Use visual threshold for matching (not joint)
-        if best_match and best_match[1] >= self.match_threshold:
+        # Two-threshold matching decision:
+        # 1. If visual_sim >= match_threshold: Confident match - accept
+        # 2. If visual_sim >= new_threshold but < match_threshold: Tentative match
+        #    (likely same person with domain shift, accept to avoid duplicate IDs)
+        # 3. If visual_sim < new_threshold: Low confidence - create new identity
+        
+        if best_match:
             global_id, visual_sim, st_prob, joint = best_match
             
-            # Update gallery with new observation
-            self.visual_matcher.add_to_gallery(
-                global_id, embedding, camera_id, timestamp
-            )
+            # Accept match if above EITHER threshold (lenient for cross-camera)
+            # The key insight: it's better to merge potentially-same people than
+            # to create duplicate IDs that can never be merged later
+            should_match = visual_sim >= self.match_threshold
             
-            # Update ST scorer TTD for cross-camera transitions
-            entry = self.visual_matcher.gallery[global_id]
-            if entry.last_camera_id != camera_id:
-                time_delta = (timestamp - entry.last_seen).total_seconds()
-                self.st_scorer.update_ttd(
-                    entry.last_camera_id, camera_id, time_delta
+            # Tentative match: Between new_threshold and match_threshold
+            # Accept if there's reasonable visual similarity AND ST supports it
+            if not should_match and visual_sim >= self.new_threshold:
+                # If same camera, lower the bar further (intra-camera is easier)
+                entry = self.visual_matcher.gallery[global_id]
+                if entry.last_camera_id == camera_id:
+                    should_match = True
+                    logger.debug(f"Tentative same-camera match: {global_id[:8]} visual={visual_sim:.3f}")
+                elif st_prob > 0.3:  # ST says transition is plausible
+                    should_match = True
+                    logger.debug(f"Tentative cross-camera match (ST plausible): {global_id[:8]} visual={visual_sim:.3f}")
+            
+            if should_match:
+                # Update gallery with new observation
+                self.visual_matcher.add_to_gallery(
+                    global_id, embedding, camera_id, timestamp
                 )
-                self.topology.update_transition(
-                    entry.last_camera_id, camera_id, time_delta
+                
+                # Update ST scorer TTD for cross-camera transitions
+                entry = self.visual_matcher.gallery[global_id]
+                if entry.last_camera_id != camera_id:
+                    time_delta = (timestamp - entry.last_seen).total_seconds()
+                    self.st_scorer.update_ttd(
+                        entry.last_camera_id, camera_id, time_delta
+                    )
+                    self.topology.update_transition(
+                        entry.last_camera_id, camera_id, time_delta
+                    )
+                
+                logger.info(
+                    f"ReID match: {global_id[:8]} (visual={visual_sim:.3f}, "
+                    f"st={st_prob:.3f}, joint={joint:.3f})"
                 )
-            
-            logger.info(
-                f"ReID match: {global_id[:8]} (visual={visual_sim:.3f}, "
-                f"st={st_prob:.3f}, joint={joint:.3f})"
-            )
-            
-            return MatchResult(
-                global_track_id=UUID(global_id),
-                visual_similarity=visual_sim,
-                st_probability=st_prob,
-                joint_score=joint,
-                is_new=False,
-            )
+                
+                return MatchResult(
+                    global_track_id=UUID(global_id),
+                    visual_similarity=visual_sim,
+                    st_probability=st_prob,
+                    joint_score=joint,
+                    is_new=False,
+                )
         
         # No confident match, create new identity
         return self._create_new_identity(camera_id, embedding, timestamp)
@@ -266,12 +288,15 @@ class ReIDService:
         self,
         image_bytes: bytes,
         top_k: int = 5,
-        threshold: float = None,  # Will use self.match_threshold if None
+        threshold: float = None,
     ) -> List[Dict]:
         """
         Search for a person in the gallery using an uploaded image.
         
-        Uses FastReID body-only embedding for matching.
+        Uses GalleryStore with cached embeddings for fast, accurate matching.
+        For each identity, computes MAX similarity across all their high-quality
+        captures (up to 5 per person with diverse poses).
+        
         Supports:
         - Full body crops
         - Full scene images (runs person detection first)
@@ -280,7 +305,7 @@ class ReIDService:
         import numpy as np
         
         if threshold is None:
-            threshold = self.match_threshold
+            threshold = settings.search_threshold
         
         # Decode image
         nparr = np.frombuffer(image_bytes, np.uint8)
@@ -289,7 +314,6 @@ class ReIDService:
             raise ValueError("Invalid image data")
         
         # Check if this is a full scene image (larger than typical crop)
-        # If so, run YOLO to detect persons
         h, w = img.shape[:2]
         is_full_scene = (h > 300 and w > 300) and (h / w < 0.6 or h / w > 1.7 or min(h, w) > 400)
         
@@ -303,47 +327,179 @@ class ReIDService:
                 
                 if len(detections) > 0:
                     logger.info(f"Detected {len(detections)} person(s) in uploaded image")
-                    # Crop each detected person
                     for det in detections:
-                        x1, y1, x2, y2 = map(int, det.bbox)
+                        # Handle both PeopleNet (dict) and YOLO (Detection object) formats
+                        if isinstance(det, dict):
+                            x1, y1, x2, y2 = int(det['x1']), int(det['y1']), int(det['x2']), int(det['y2'])
+                        else:
+                            x1, y1, x2, y2 = map(int, det.bbox)
                         x1, y1 = max(0, x1), max(0, y1)
                         x2, y2 = min(w, x2), min(h, y2)
                         if x2 > x1 and y2 > y1:
-                            crop = img[y1:y2, x1:x2]
-                            person_crops.append(crop)
+                            person_crops.append(img[y1:y2, x1:x2])
             except Exception as det_err:
                 logger.warning(f"Person detection failed, treating as single crop: {det_err}")
         
-        # If no detections (or single person image), use the whole image
         if not person_crops:
             person_crops = [img]
         
-        # Extract body embedding using FastReID
+        # Extract query embedding
         from app.services.tracking_service import get_tracking_service
         tracking_service = get_tracking_service()
-        embedding = tracking_service.extract_from_image(person_crops[0])
+        query_embedding = tracking_service.extract_from_image(person_crops[0])
         
-        if embedding is None:
+        if query_embedding is None:
             raise ValueError("Failed to extract features from image")
         
-        logger.info("Using configured feature extractor for search")
+        # Normalize query embedding
+        query_norm = np.linalg.norm(query_embedding)
+        if query_norm > 0:
+            query_embedding = query_embedding / query_norm
         
-        # Search gallery
-        all_matches = self.visual_matcher.match(embedding, top_k=top_k)
+        logger.info("Searching GalleryStore with cached embeddings...")
         
+        # Search GalleryStore - compare against all cached embeddings
+        from app.services.gallery_store import get_gallery_store
+        gallery_store = get_gallery_store()
+        
+        match_results = []  # List of (global_id, max_score, best_capture)
+        
+        for gallery in gallery_store._galleries.values():
+            global_id = gallery.global_id
+            max_score = 0.0
+            best_capture = None
+            
+            for capture in gallery.captures:
+                if capture.embedding is None:
+                    continue  # Skip captures without cached embeddings
+                
+                # Normalize stored embedding
+                cap_emb = capture.embedding
+                cap_norm = np.linalg.norm(cap_emb)
+                if cap_norm > 0:
+                    cap_emb = cap_emb / cap_norm
+                
+                # Cosine similarity
+                similarity = float(np.dot(query_embedding, cap_emb))
+                
+                if similarity > max_score:
+                    max_score = similarity
+                    best_capture = capture
+            
+            if max_score >= threshold:
+                match_results.append((global_id, max_score, best_capture))
+        
+        # Sort by score descending and take more than needed for potential merging
+        match_results.sort(key=lambda x: -x[1])
+        match_results = match_results[:top_k * 2]  # Get extra candidates for merging
+        
+        # =========================================
+        # Retrospective Identity Merging
+        # =========================================
+        # Detect if multiple matches are likely the same person (fragmented IDs)
+        # and merge them into a single unified result.
+        
+        if len(match_results) > 1:
+            # Get embeddings for each matched identity
+            identity_embeddings = {}
+            for global_id, score, capture in match_results:
+                entry = self.visual_matcher.gallery.get(global_id)
+                if entry and entry.embedding is not None:
+                    identity_embeddings[global_id] = entry.embedding
+            
+            # Pairwise similarity check to detect fragments
+            merge_threshold = settings.reid_merge_threshold  # Configurable threshold
+            merge_groups = {}  # Maps each ID to its canonical (highest scoring) ID
+            used = set()
+            
+            for i, (gid1, score1, cap1) in enumerate(match_results):
+                if gid1 in used:
+                    continue
+                    
+                merge_groups[gid1] = {
+                    'ids': [gid1],
+                    'primary_score': score1,
+                    'primary_capture': cap1,
+                    'cameras': set()
+                }
+                
+                # Get cameras for this identity
+                entry1 = self.visual_matcher.gallery.get(gid1)
+                if entry1 and entry1.camera_history:
+                    merge_groups[gid1]['cameras'].update(entry1.camera_history)
+                
+                emb1 = identity_embeddings.get(gid1)
+                if emb1 is None:
+                    continue
+                
+                # Check similarity with remaining candidates
+                for j, (gid2, score2, cap2) in enumerate(match_results[i+1:], start=i+1):
+                    if gid2 in used:
+                        continue
+                    
+                    emb2 = identity_embeddings.get(gid2)
+                    if emb2 is None:
+                        continue
+                    
+                    # Normalize and compute similarity
+                    emb1_norm = emb1 / (np.linalg.norm(emb1) + 1e-8)
+                    emb2_norm = emb2 / (np.linalg.norm(emb2) + 1e-8)
+                    mutual_sim = float(np.dot(emb1_norm, emb2_norm))
+                    
+                    if mutual_sim >= merge_threshold:
+                        logger.info(f"MERGE: {gid1[:8]} + {gid2[:8]} (mutual_sim={mutual_sim:.3f})")
+                        merge_groups[gid1]['ids'].append(gid2)
+                        used.add(gid2)
+                        
+                        # Merge camera sequences
+                        entry2 = self.visual_matcher.gallery.get(gid2)
+                        if entry2 and entry2.camera_history:
+                            merge_groups[gid1]['cameras'].update(entry2.camera_history)
+            
+            # Rebuild match_results with merged identities
+            merged_results = []
+            for gid, group in merge_groups.items():
+                merged_results.append((
+                    gid,
+                    group['primary_score'],
+                    group['primary_capture'],
+                    list(group['cameras']),  # Merged camera sequence
+                    group['ids']  # All merged IDs for reference
+                ))
+            
+            # Sort by score and take top_k
+            merged_results.sort(key=lambda x: -x[1])
+            merged_results = merged_results[:top_k]
+        else:
+            merged_results = [
+                (gid, score, cap, 
+                 self.visual_matcher.gallery.get(gid).camera_history if self.visual_matcher.gallery.get(gid) else [],
+                 [gid])
+                for gid, score, cap in match_results[:top_k]
+            ]
+        
+        # Build response with merged metadata
         results = []
-        for item in all_matches:
-            global_id, score = item[0], item[1]
-            entry = item[2] if len(item) > 2 else None
-            logger.info(f"Search candidate: {global_id} score={score:.4f} threshold={threshold}")
-            if score >= threshold:
-                results.append({
-                    "global_track_id": global_id,
-                    "score": score,
-                    "last_seen": entry.last_seen,
-                    "camera_sequence": entry.camera_history if entry.camera_history else [entry.last_camera_id],
-                })
+        for global_id, score, capture, merged_cameras, merged_ids in merged_results:
+            entry = self.visual_matcher.gallery.get(global_id)
+            
+            if len(merged_ids) > 1:
+                logger.info(f"Search match (MERGED): {global_id[:8]} score={score:.4f} "
+                           f"from {len(merged_ids)} IDs, cameras={merged_cameras}")
+            else:
+                logger.info(f"Search match: {global_id[:8]} score={score:.4f}")
+            
+            results.append({
+                "global_track_id": global_id,
+                "score": score,
+                "last_seen": entry.last_seen if entry else (capture.timestamp if capture else None),
+                "camera_sequence": merged_cameras if merged_cameras else (entry.camera_history if entry else []),
+                "best_capture_pose": capture.pose if capture else "unknown",
+                "best_capture_quality": capture.quality_score if capture else 0.0,
+                "merged_ids": merged_ids if len(merged_ids) > 1 else None,  # Include for debugging
+            })
         
+        logger.info(f"Search complete: {len(results)} matches found above threshold {threshold}")
         return results
     
     def get_plausible_cameras(
@@ -358,42 +514,59 @@ class ReIDService:
         """Get number of identities in gallery."""
         return self.visual_matcher.gallery_size
     
-    def set_thumbnail(self, global_id: str, thumbnail_base64: str, quality: float = 0.0):
-        """
-        Store a thumbnail for a person.
-        
-        Only updates if the new thumbnail has better quality than the existing one.
-        
-        Args:
-            global_id: Global track ID
-            thumbnail_base64: Base64 encoded thumbnail image
-            quality: Quality score (0.0 - 1.0), higher is better
-        """
-        current_quality = self.thumbnail_quality.get(global_id, -1.0)
-        
-        if quality > (current_quality * 1.02):
-            self.person_thumbnails[global_id] = thumbnail_base64
-            self.thumbnail_quality[global_id] = quality
-            logger.debug(f"Updated thumbnail for {global_id[:8]} (quality: {current_quality:.2f} -> {quality:.2f})")
+    # NOTE: set_thumbnail() removed - thumbnails now managed by GalleryStore only
     
     def get_gallery(self) -> List[Dict]:
-        """Get all gallery entries with thumbnails."""
+        """Get all gallery entries with thumbnails from GalleryStore."""
+        from app.services.gallery_store import get_gallery_store
+        gallery_store = get_gallery_store()
+        
         entries = []
         for global_id, entry in self.visual_matcher.gallery.items():
+            # Get thumbnail from GalleryStore (single source of truth)
+            thumbnail = gallery_store.get_thumbnail(global_id)
+            
+            # Build camera sequence with timestamps
+            camera_sequence = []
+            for cam_id in entry.camera_history:
+                seq_entry = {"camera_id": cam_id}
+                if cam_id in entry.camera_timestamps:
+                    seq_entry["first_seen"] = entry.camera_timestamps[cam_id].isoformat()
+                camera_sequence.append(seq_entry)
+            
+            # Build transitions list
+            transitions = []
+            for t in entry.transitions:
+                transitions.append({
+                    "from_camera": t.from_camera,
+                    "to_camera": t.to_camera,
+                    "transition_time": t.transition_time.isoformat(),
+                    "time_at_from": t.time_at_from_camera,
+                })
+            
             entries.append({
                 "global_id": global_id,
                 "last_camera_id": entry.last_camera_id,
+                "first_seen": entry.first_seen.isoformat() if entry.first_seen else None,
                 "last_seen": entry.last_seen.isoformat(),
                 "appearance_count": entry.appearance_count,
-                "thumbnail": self.person_thumbnails.get(global_id),
+                "thumbnail": thumbnail,
+                "camera_sequence": camera_sequence,
+                "transitions": transitions,
             })
         return entries
     
     def clear_gallery(self):
-        """Clear all identities."""
+        """Clear all identities from both VisualMatcher and GalleryStore."""
         self.visual_matcher.clear_gallery()
         self._recent_tracklets.clear()
-        logger.info("ReID gallery cleared")
+        
+        # Also clear GalleryStore (single source of truth for captures)
+        from app.services.gallery_store import get_gallery_store
+        gallery_store = get_gallery_store()
+        gallery_store.clear()
+        
+        logger.info("ReID gallery cleared (VisualMatcher + GalleryStore)")
 
 
 # Service singleton

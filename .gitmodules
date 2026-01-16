@@ -1,3 +1,0 @@
-[submodule "backend/fastreid_lib"]
-	path = backend/fastreid_lib
-	url = https://github.com/JDAI-CV/fast-reid.git

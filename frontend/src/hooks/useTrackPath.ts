@@ -34,49 +34,98 @@ export function useTrackPath({ wsUrl = 'ws://localhost:8000/api/v1/ws/tracks', g
     const [connected, setConnected] = useState(false);
 
     useEffect(() => {
-        const ws = new WebSocket(wsUrl);
+        let ws: WebSocket | null = null;
+        let reconnectTimeout: ReturnType<typeof setTimeout>;
+        let isMounted = true;
+        let retryCount = 0;
+        const MAX_RETRIES = 5;
+        const BASE_DELAY = 1000;
 
-        ws.onopen = () => {
-            console.log('Track path WebSocket connected');
-            setConnected(true);
-        };
+        const connect = () => {
+            if (!isMounted) return;
 
-        ws.onmessage = (event) => {
             try {
-                const message = JSON.parse(event.data);
-                
-                if (message.type === 'track_path_update') {
-                    const update: TrackPathUpdate = message.data;
-                    
-                    // Update all tracks map
-                    setAllTracks(prev => {
-                        const newMap = new Map(prev);
-                        newMap.set(update.global_track_id, update);
-                        return newMap;
-                    });
-                    
-                    // If watching specific track, update path
-                    if (globalId && update.global_track_id === globalId) {
-                        setPathPoints(update.path_points);
-                        setCameraSequence(update.camera_sequence);
+                ws = new WebSocket(wsUrl);
+
+                ws.onopen = () => {
+                    if (!isMounted) return;
+                    console.log('Track path WebSocket connected');
+                    setConnected(true);
+                    retryCount = 0; // Reset retries on successful connection
+                };
+
+                ws.onmessage = (event) => {
+                    if (!isMounted) return;
+                    try {
+                        const message = JSON.parse(event.data);
+                        
+                        if (message.type === 'track_path_update') {
+                            const update: TrackPathUpdate = message.data;
+                            
+                            // Update all tracks map
+                            setAllTracks(prev => {
+                                const newMap = new Map(prev);
+                                newMap.set(update.global_track_id, update);
+                                return newMap;
+                            });
+                            
+                            // If watching specific track, update path
+                            if (globalId && update.global_track_id === globalId) {
+                                setPathPoints(update.path_points);
+                                setCameraSequence(update.camera_sequence);
+                            }
+                        }
+                    } catch (e) {
+                        console.error('WebSocket message parse error:', e);
                     }
+                };
+
+                ws.onclose = (event) => {
+                    if (!isMounted) return;
+                    setConnected(false);
+                    
+                    // Only reconnect if not closed cleanly
+                    if (!event.wasClean) {
+                        const delay = Math.min(BASE_DELAY * Math.pow(2, retryCount), 10000);
+                        console.log(`WebSocket disconnected. Reconnecting in ${delay}ms... (Attempt ${retryCount + 1}/${MAX_RETRIES})`);
+                        
+                        if (retryCount < MAX_RETRIES) {
+                            retryCount++;
+                            reconnectTimeout = setTimeout(connect, delay);
+                        } else {
+                            console.error('Max WebSocket reconnection attempts reached');
+                        }
+                    }
+                };
+
+                ws.onerror = (error) => {
+                    // Start suppressing verbose errors after first failure to reduce console noise
+                    if (retryCount === 0) {
+                        console.warn('Track path WebSocket connection error - will attempt to reconnect');
+                    }
+                    // Do not log the full error object as it is usually empty in browsers
+                };
+
+            } catch (err) {
+                console.error('WebSocket connection initialization error:', err);
+                if (retryCount < MAX_RETRIES) {
+                    retryCount++;
+                    reconnectTimeout = setTimeout(connect, 3000);
                 }
-            } catch (e) {
-                console.error('WebSocket message parse error:', e);
             }
         };
 
-        ws.onclose = () => {
-            console.log('Track path WebSocket disconnected');
-            setConnected(false);
-        };
-
-        ws.onerror = (error) => {
-            console.error('Track path WebSocket error:', error);
-        };
+        connect();
 
         return () => {
-            ws.close();
+            isMounted = false;
+            if (ws) {
+                ws.onclose = null; // Prevent reconnection trigger on cleanup
+                ws.close();
+            }
+            if (reconnectTimeout) {
+                clearTimeout(reconnectTimeout);
+            }
         };
     }, [wsUrl, globalId]);
 

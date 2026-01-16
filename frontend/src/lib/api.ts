@@ -45,10 +45,22 @@ export interface TrackPathPoint {
   name: string;
 }
 
+export interface CameraSequenceItem {
+  camera_id: number;
+  first_seen?: string;
+}
+
+export interface Transition {
+  from_camera: number;
+  to_camera: number;
+  transition_time: string;
+  time_at_from: number;
+}
+
 export interface GlobalTrack {
   id: string;
   status: 'active' | 'lost' | 'finished';
-  first_seen: string;
+  first_seen?: string;
   last_seen: string;
   camera_sequence: number[];
   tracklet_count: number;
@@ -58,6 +70,8 @@ export interface SearchResult {
   track: GlobalTrack;
   score: number;
   path_points: TrackPathPoint[];
+  camera_sequence?: CameraSequenceItem[];
+  transitions?: Transition[];
 }
 
 export interface SystemHealth {
@@ -98,10 +112,14 @@ export const streamsApi = {
     camera_id: number;
     name?: string;
     file: File;
+    latitude?: number;
+    longitude?: number;
   }) => {
     const formData = new FormData();
     formData.append('camera_id', String(data.camera_id));
     if (data.name) formData.append('name', data.name);
+    if (data.latitude) formData.append('latitude', String(data.latitude));
+    if (data.longitude) formData.append('longitude', String(data.longitude));
     formData.append('file', data.file);
 
     const res = await fetch(`${API_BASE}/streams/sources/upload`, {

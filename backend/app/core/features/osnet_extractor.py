@@ -656,7 +656,6 @@ def get_extractor(
     model_path: Optional[str] = None,
     device: Optional[str] = None,
     use_onnx: bool = True,
-    use_fastreid: bool = False,  # Disabled by default
     use_nvidia: bool = True,   # Default to NVIDIA model
 ):
     """
@@ -696,15 +695,6 @@ def get_extractor(
         except Exception as e:
             logger.warning(f"NVIDIA ReID not available, falling back: {e}")
 
-    # Priority 2: FastReID
-        try:
-            from app.core.features.fastreid_extractor import get_fastreid_extractor, FASTREID_AVAILABLE
-            if FASTREID_AVAILABLE:
-                logger.info("Attempting to load FastReID extractor (SOTA accuracy)")
-                _extractor_instance = get_fastreid_extractor(device=device, use_onnx=use_onnx)
-                return _extractor_instance
-        except Exception as e:
-            logger.warning(f"FastReID not available, falling back to OSNet: {e}")
     
     # Fall back to OSNet
     is_onnx_model = model_path is not None and model_path.endswith('.onnx')

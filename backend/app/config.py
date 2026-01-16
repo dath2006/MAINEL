@@ -59,19 +59,6 @@ class Settings(BaseSettings):
         description="YOLO NMS IoU threshold"
     )
     
-    # FastReID Settings (SOTA ReID) - Using BoT R50-ibn for better generalization
-    fastreid_config_path: str = Field(
-        default="fastreid_lib/configs/Market1501/bagtricks_R50-ibn.yml",
-        description="Path to FastReID config YAML"
-    )
-    fastreid_weights_path: str = Field(
-        default="model_weights/market_bot_R50-ibn.pth",
-        description="Path to FastReID pretrained weights"
-    )
-    fastreid_onnx_path: Optional[str] = Field(
-        default="model_weights/fastreid_bot_R50-ibn.onnx",
-        description="Path to FastReID ONNX model"
-    )
     
     # NVIDIA TAO ReID Settings (Preferred)
     nvidia_reid_onnx_path: str = Field(
@@ -86,17 +73,29 @@ class Settings(BaseSettings):
     # OSNet (Legacy) Settings
     osnet_model_path: Optional[str] = Field(
         default=None,
-        description="Path to OSNet model weights (fallback if FastReID/NVIDIA unavailable)"
+        description="Path to OSNet model weights (fallback if NVIDIA unavailable)"
     )
     reid_embedding_dim: int = Field(
         default=256,  # Changed from 2048/512 for NVIDIA model
-        description="Dimension of ReID feature embeddings (256 for NVIDIA, 2048 for FastReID)"
+        description="Dimension of ReID feature embeddings (256 for NVIDIA)"
     )
     reid_match_threshold: float = Field(
-        default=0.45,  # Adjusted for NVIDIA model (0.45=Low, 0.65=Medium, 0.80=High)
+        default=0.40,  # Lower threshold for cross-camera matching (domain shift)
         ge=0.0,
         le=1.0,
-        description="Cosine similarity threshold for ReID matching"
+        description="Cosine similarity threshold for matching to existing identity"
+    )
+    reid_new_threshold: float = Field(
+        default=0.50,  # Higher threshold - only create new ID if no match above this
+        ge=0.0,
+        le=1.0,
+        description="Threshold for creating new identity (if best match below this, create new)"
+    )
+    reid_merge_threshold: float = Field(
+        default=0.50,
+        ge=0.0,
+        le=1.0,
+        description="Threshold for merging fragmented identities in search results"
     )
     
     # Tracking
@@ -149,18 +148,18 @@ class Settings(BaseSettings):
         description="GPU memory limit for ONNX Runtime in GB"
     )
     
-    # Thumbnail Settings
-    min_thumbnail_quality: float = Field(
-        default=0.3,
-        ge=0.0,
-        le=1.0,
-        description="Minimum quality score to save/update thumbnail"
-    )
+    # Gallery & Search Settings
     search_threshold: float = Field(
-        default=0.4,
+        default=0.5,
         ge=0.0,
         le=1.0,
         description="Similarity threshold for image search (lower = more results)"
+    )
+    gallery_quality_threshold: float = Field(
+        default=55.0,
+        ge=0.0,
+        le=100.0,
+        description="Minimum quality score (0-100) to save captures to gallery"
     )
     
     class Config:

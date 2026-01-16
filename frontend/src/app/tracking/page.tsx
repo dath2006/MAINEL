@@ -26,8 +26,8 @@ const MultiTrackMap = dynamic(() => import('@/components/tracking/MultiTrackMap'
   loading: () => <div className="h-[400px] w-full animate-pulse rounded-lg bg-slate-100 dark:bg-slate-800" />
 });
 
-const TrackTimeline = dynamic(() => import('@/components/tracking/TrackTimeline'), { 
-  ssr: false 
+const SearchResultsPanel = dynamic(() => import('@/components/tracking/SearchResultsPanel'), {
+  ssr: false
 });
 
 export default function TrackingPage() {
@@ -130,6 +130,8 @@ export default function TrackingPage() {
           camera_id:newSource.camera_id,
           name: newSource.name,
           file: newSource.file,
+          latitude: newSource.latitude,
+          longitude: newSource.longitude,
         });
       }else{
         await streamsApi.addSource({
@@ -140,10 +142,10 @@ export default function TrackingPage() {
           latitude: newSource.latitude,
           longitude: newSource.longitude,
         });
-
-        setIsAddDialogOpen(false);
-        fetchData();
       }
+
+      setIsAddDialogOpen(false);
+      fetchData();
     } catch(error){
       setAddError(error instanceof Error ? error.message : 'Failed to add source)');
     }
@@ -382,7 +384,7 @@ export default function TrackingPage() {
                 )}
             </TabsContent>
             
-            <TabsContent value="map" className="h-[600px] w-full border rounded-lg overflow-hidden relative z-0">
+            <TabsContent value="map" className="h-[600px] w-full border rounded-lg relative">
                  {/* Use MultiTrackMap for real-time updates */}
                  <MultiTrackMap 
                     sources={sources} 
@@ -403,55 +405,17 @@ export default function TrackingPage() {
                     }}
                  />
                  
-                 {/* Search Results Overlay + Timeline */}
+                 {/* Search Results Panel - Premium UI */}
                  {searchResults.length > 0 && (
-                     <div className="absolute top-4 right-4 z-[1000] w-72 bg-background/95 backdrop-blur shadow-lg rounded-lg border max-h-[550px] overflow-hidden flex flex-col">
-                        <div className="p-4 border-b">
-                            <h3 className="font-semibold">Search Results</h3>
-                            <p className="text-xs text-muted-foreground">{searchResults.length} match(es) found</p>
-                        </div>
-                        <div className="flex-1 overflow-auto p-2">
-                            <div className="space-y-2 mb-4">
-                                {searchResults.map((result, idx) => (
-                                    <div 
-                                        key={result.track.id} 
-                                        className={`p-3 rounded-lg border cursor-pointer transition-all hover:bg-accent ${
-                                            selectedResult?.track.id === result.track.id 
-                                                ? 'bg-accent border-primary shadow-sm' 
-                                                : 'bg-card'
-                                        }`}
-                                        onClick={() => setSelectedResult(result)}
-                                    >
-                                        <div className="flex items-center justify-between mb-1">
-                                            <span className="text-sm font-medium">Match #{idx + 1}</span>
-                                            <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full">
-                                                {(result.score * 100).toFixed(0)}%
-                                            </span>
-                                        </div>
-                                        <div className="text-xs text-muted-foreground">
-                                            Cameras: {result.track.camera_sequence?.join(' → ') || 'N/A'}
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                            
-                            {/* Timeline for selected result */}
-                            {selectedResult && (
-                                <div className="border-t pt-4">
-                                    <TrackTimeline
-                                        globalId={selectedResult.track.id}
-                                        events={selectedResult.path_points?.map((pt: any, i: number) => ({
-                                            camera_id: pt.camera_id,
-                                            camera_name: pt.name,
-                                            timestamp: selectedResult.track.last_seen || new Date().toISOString(),
-                                            latitude: pt.latitude,
-                                            longitude: pt.longitude,
-                                        })) || []}
-                                    />
-                                </div>
-                            )}
-                        </div>
-                     </div>
+                     <SearchResultsPanel
+                         results={searchResults}
+                         selectedResult={selectedResult}
+                         onSelect={setSelectedResult}
+                         onClose={() => {
+                             setSearchResults([]);
+                             setSelectedResult(null);
+                         }}
+                     />
                  )}
             </TabsContent>
         </Tabs>

@@ -141,12 +141,15 @@ async def search_by_image(
              track_data = store.get_track(global_id)
 
              if track_data:
+                 # Use camera_sequence from the search result (visual_matcher.camera_history)
+                 # as it's authoritative for ReID cross-camera tracking
+                 camera_seq = match.get("camera_sequence", [])
                  
-                 # Enrich camera sequence with locations
-                 camera_seq = track_data.get("camera_sequence", [])
+                 # Fallback to track_store if search result doesn't have it
+                 if not camera_seq:
+                     camera_seq = track_data.get("camera_sequence", [])
+                 
                  logger.info(f"Enriching track {global_id} with camera seq: {camera_seq}")
-                 with open("debug_tracks.log", "a") as f:
-                     f.write(f"Enriching track {global_id} with camera seq: {camera_seq}\n")
                  
                  path_points = []
                  for cam_id in camera_seq:
@@ -167,12 +170,11 @@ async def search_by_image(
 
                  if not path_points:
                      logger.warning(f"No path points generated from sequence {camera_seq}")
-                     with open("debug_tracks.log", "a") as f:
-                         f.write(f"No path points generated from sequence {camera_seq}\n")
                  else:
                      logger.info(f"Generated {len(path_points)} path points")
-                     with open("debug_tracks.log", "a") as f:
-                         f.write(f"Generated {len(path_points)} path points: {path_points}\n")
+                 
+                 # Update track_data with correct camera_sequence before creating response
+                 track_data["camera_sequence"] = camera_seq
                  
                  results.append({
                      "track": GlobalTrackResponse(**track_data),

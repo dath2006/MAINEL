@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap, useMapEvents } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
+import AntPath from './AntPath';
 
 const createCustomIcon = (color: string, number?: number) => {
     return L.divIcon({
@@ -43,18 +44,34 @@ interface MapProps {
     onMapClick?: (lat: number, lng: number) => void;
 }
 
-function ChangeView({ center, zoom, pathPoints }: { center: [number, number], zoom: number, pathPoints?: any[] }) {
+function ChangeView({ center, zoom, pathPoints, sources }: { center: [number, number], zoom: number, pathPoints?: any[], sources?: any[] }) {
     const map = useMap();
     const [lat, lng] = center;
 
     useEffect(() => {
-        if (pathPoints && pathPoints.length > 0) {
-            const bounds = L.latLngBounds(pathPoints.map(p => [p.latitude, p.longitude]));
-            map.fitBounds(bounds, { padding: [50, 50] });
+        const points: [number, number][] = [];
+
+        // Add path points
+        if (pathPoints) {
+            pathPoints.forEach(p => {
+                if (p.latitude && p.longitude) points.push([p.latitude, p.longitude]);
+            });
+        }
+
+        // Add all camera sources
+        if (sources) {
+            sources.forEach(s => {
+                if (s.latitude && s.longitude) points.push([s.latitude, s.longitude]);
+            });
+        }
+
+        if (points.length > 0) {
+            const bounds = L.latLngBounds(points);
+            map.fitBounds(bounds, { padding: [50, 50], maxZoom: 18 });
         } else {
             map.setView([lat, lng], zoom);
         }
-    }, [lat, lng, zoom, map, pathPoints]); 
+    }, [lat, lng, zoom, map, pathPoints, sources]); 
     return null;
 }
 
@@ -71,12 +88,21 @@ function MapEvents({ onMapClick }: { onMapClick?: (lat: number, lng: number) => 
 
 const fetchRoute = async (start: [number, number], end: [number, number]) => {
     try {
+        const apiKey = process.env.NEXT_PUBLIC_ORS_API_KEY;
+        
+        if (!apiKey) return [start, end];
+
+        const startLngLat = `${start[1]},${start[0]}`;
+        const endLngLat = `${end[1]},${end[0]}`;
+
         const response = await fetch(
-            `http://router.project-osrm.org/route/v1/foot/${start[1]},${start[0]};${end[1]},${end[0]}?overview=full&geometries=geojson`
+            `https://api.openrouteservice.org/v2/directions/foot-walking?api_key=${apiKey}&start=${startLngLat}&end=${endLngLat}`
         );
+        
         const data = await response.json();
-        if (data.routes && data.routes.length > 0) {
-            return data.routes[0].geometry.coordinates.map((coord: number[]) => [coord[1], coord[0]]); // Swap to [lat, lng]
+        if (data.features?.[0]?.geometry?.coordinates) {
+             // ORS returns [lon, lat], Leaflet needs [lat, lon]
+            return data.features[0].geometry.coordinates.map((coord: number[]) => [coord[1], coord[0]]);
         }
     } catch (error) {
         console.error("Error fetching route:", error);
@@ -123,7 +149,7 @@ export default function Map({ sources, pathPoints, center = [12.9716, 77.5946], 
 
     return (
         <MapContainer center={center} zoom={zoom} scrollWheelZoom={true} className="h-full w-full rounded-lg" style={{ minHeight: '400px' }}>
-            <ChangeView center={center} zoom={zoom} pathPoints={pathPoints} />
+            <ChangeView center={center} zoom={zoom} pathPoints={pathPoints} sources={sources} />
             <MapEvents onMapClick={onMapClick} />
             <TileLayer
                 attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -147,13 +173,18 @@ export default function Map({ sources, pathPoints, center = [12.9716, 77.5946], 
                 ) : null
             ))}
 
-            {/* Track Path (Interpolated) */}
+            {/* Track Path (Interpolated - Animated) */}
             {interpolatedPath.length > 0 && (
-                <Polyline 
+                <AntPath 
                     positions={interpolatedPath} 
-                    color="#3b82f6" 
-                    weight={6} 
-                    opacity={0.8}
+                    options={{
+                        color: "#3b82f6",
+                        pulseColor: "#FFFFFF",
+                        delay: 800,
+                        dashArray: [10, 20],
+                        weight: 6,
+                        opacity: 0.8
+                    }}
                 />
             )}
             

@@ -13,15 +13,27 @@ from loguru import logger
 
 
 @dataclass
+class CameraTransition:
+    """Records a camera-to-camera transition with timing."""
+    from_camera: int
+    to_camera: int
+    transition_time: datetime
+    time_at_from_camera: float = 0.0  # seconds spent at from_camera before leaving
+
+
+@dataclass
 class GalleryEntry:
     """Entry in the identity gallery."""
     global_id: str
     embedding: np.ndarray  # Average feature embedding
     last_camera_id: int
     last_seen: datetime
+    first_seen: datetime = None  # When this identity was first observed
     appearance_count: int = 1
     embeddings_history: List[np.ndarray] = field(default_factory=list)
     camera_history: List[int] = field(default_factory=list)  # All cameras where seen
+    camera_timestamps: Dict[int, datetime] = field(default_factory=dict)  # camera_id -> first seen at that camera
+    transitions: List[CameraTransition] = field(default_factory=list)  # Ordered list of camera transitions
 
 
 class VisualMatcher:
@@ -35,6 +47,7 @@ class VisualMatcher:
     def __init__(
         self,
         match_threshold: float = 0.3,
+        candidate_threshold: float = 0.25,  # Lower threshold for candidate pre-filtering
         max_gallery_size: int = 1000,
         embedding_history_size: int = 10,
     ):
@@ -43,10 +56,12 @@ class VisualMatcher:
         
         Args:
             match_threshold: Minimum similarity for valid match
+            candidate_threshold: Lower threshold for candidate pre-filtering (for two-threshold systems)
             max_gallery_size: Maximum identities to track
             embedding_history_size: Embeddings to keep per identity for averaging
         """
         self.match_threshold = match_threshold
+        self.candidate_threshold = candidate_threshold
         self.max_gallery_size = max_gallery_size
         self.embedding_history_size = embedding_history_size
         
@@ -94,6 +109,18 @@ class VisualMatcher:
             entry.embedding = np.mean(entry.embeddings_history, axis=0)
             entry.embedding = entry.embedding / np.linalg.norm(entry.embedding)
             
+            # Track camera transition if camera changed
+            if entry.last_camera_id != camera_id:
+                time_at_prev = (timestamp - entry.last_seen).total_seconds()
+                transition = CameraTransition(
+                    from_camera=entry.last_camera_id,
+                    to_camera=camera_id,
+                    transition_time=timestamp,
+                    time_at_from_camera=time_at_prev
+                )
+                entry.transitions.append(transition)
+                logger.debug(f"Camera transition: {entry.last_camera_id} -> {camera_id} (after {time_at_prev:.1f}s)")
+            
             entry.last_camera_id = camera_id
             entry.last_seen = timestamp
             entry.appearance_count += 1
@@ -101,6 +128,10 @@ class VisualMatcher:
             # Track camera history (avoid duplicates in sequence)
             if not entry.camera_history or entry.camera_history[-1] != camera_id:
                 entry.camera_history.append(camera_id)
+            
+            # Track first time at this camera
+            if camera_id not in entry.camera_timestamps:
+                entry.camera_timestamps[camera_id] = timestamp
         else:
             # Check gallery size limit
             if len(self.gallery) >= self.max_gallery_size:
@@ -111,8 +142,11 @@ class VisualMatcher:
                 embedding=embedding.copy(),
                 last_camera_id=camera_id,
                 last_seen=timestamp,
+                first_seen=timestamp,
                 embeddings_history=[embedding.copy()],
                 camera_history=[camera_id],
+                camera_timestamps={camera_id: timestamp},
+                transitions=[],
             )
         
         logger.debug(f"Gallery updated: {global_id} (size={len(self.gallery)})")
@@ -131,14 +165,22 @@ class VisualMatcher:
         query_embedding: np.ndarray,
         top_k: int = 5,
         exclude_ids: Optional[List[str]] = None,
+        use_gallery_store: bool = True,
     ) -> List[Tuple[str, float, GalleryEntry]]:
         """
         Find best matching identities from gallery.
+        
+        Uses hybrid matching:
+        1. Compares against averaged embedding in VisualMatcher (fast)
+        2. If GalleryStore available, also computes MAX similarity across 
+           all stored embeddings (more robust for cross-camera)
+        3. Takes the higher of the two scores
         
         Args:
             query_embedding: Query feature embedding
             top_k: Number of top matches to return
             exclude_ids: IDs to exclude from matching
+            use_gallery_store: Whether to also check GalleryStore embeddings
             
         Returns:
             List of (global_id, similarity, entry) sorted by similarity
@@ -153,21 +195,46 @@ class VisualMatcher:
         
         exclude_ids = exclude_ids or []
         
+        # Get GalleryStore for multi-embedding matching
+        gallery_store = None
+        if use_gallery_store:
+            try:
+                from app.services.gallery_store import get_gallery_store
+                gallery_store = get_gallery_store()
+            except Exception:
+                pass
+        
         # Compute similarities
         results = []
         for global_id, entry in self.gallery.items():
             if global_id in exclude_ids:
                 continue
             
-            similarity = float(np.dot(query_embedding, entry.embedding))
-            logger.info(f"Match check: {global_id[:8]} from cam={entry.last_camera_id} similarity={similarity:.3f} threshold={self.match_threshold}")
+            # Score 1: Similarity against averaged embedding (fast)
+            avg_similarity = float(np.dot(query_embedding, entry.embedding))
+            
+            # Score 2: MAX similarity against all GalleryStore embeddings (robust)
+            max_similarity = avg_similarity  # default to avg if GalleryStore not available
+            if gallery_store:
+                gs_max = gallery_store.compute_max_similarity(query_embedding, global_id)
+                if gs_max > 0:
+                    max_similarity = gs_max
+            
+            # Use the higher of the two for matching decision
+            similarity = max(avg_similarity, max_similarity)
+            
+            logger.debug(
+                f"Match check: {global_id[:8]} cam={entry.last_camera_id} "
+                f"avg_sim={avg_similarity:.3f} max_sim={max_similarity:.3f} "
+                f"final={similarity:.3f}"
+            )
             results.append((global_id, similarity, entry))
         
         # Sort by similarity (descending)
         results.sort(key=lambda x: x[1], reverse=True)
         
-        # Apply threshold and limit
-        results = [r for r in results if r[1] >= self.match_threshold]
+        # Use candidate_threshold for pre-filtering (let caller decide with stricter threshold)
+        results = [r for r in results if r[1] >= self.candidate_threshold]
         return results[:top_k]
     
     def match_best(

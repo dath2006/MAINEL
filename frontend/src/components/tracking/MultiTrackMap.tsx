@@ -5,6 +5,7 @@ import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap, useMapEvents 
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { useTrackPath } from '@/hooks/useTrackPath';
+import AntPath from './AntPath';
 
 // Generate distinct colors for multiple tracks
 const TRACK_COLORS = [
@@ -108,7 +109,7 @@ if (typeof window !== 'undefined') {
     loadCachedRoutes();
 }
 
-// Fast route fetching with cache and fallback
+// OpenRouteService routing
 const fetchRoute = async (start: [number, number], end: [number, number]): Promise<[number, number][]> => {
     const cacheKey = getCacheKey(start, end);
     
@@ -116,56 +117,46 @@ const fetchRoute = async (start: [number, number], end: [number, number]): Promi
     if (routeCache.has(cacheKey)) {
         return routeCache.get(cacheKey)!;
     }
+
+    const apiKey = process.env.NEXT_PUBLIC_ORS_API_KEY;
+
+    // Fallback to straight line if no key
+    if (!apiKey) {
+        console.warn('No ORS API key found, using straight lines');
+        return [start, end];
+    }
     
-    // Try FOSSGIS OSRM instance first (Often faster/less rate-limited than main demo)
     try {
+        // ORS expects [lon, lat]
+        const startLngLat = `${start[1]},${start[0]}`;
+        const endLngLat = `${end[1]},${end[0]}`;
+        
         const response = await fetch(
-            `https://routing.openstreetmap.de/routed-foot/route/v1/foot/${start[1]},${start[0]};${end[1]},${end[0]}?overview=full&geometries=geojson`,
-            { signal: AbortSignal.timeout(3000) }
+            `https://api.openrouteservice.org/v2/directions/foot-walking?api_key=${apiKey}&start=${startLngLat}&end=${endLngLat}`
         );
+
         if (response.ok) {
             const data = await response.json();
-            if (data.routes?.[0]?.geometry?.coordinates) {
-                const route = data.routes[0].geometry.coordinates.map((coord: number[]) => 
+            // Check for valid GeoJSON response
+            if (data.features?.[0]?.geometry?.coordinates) {
+                // ORS returns [lon, lat], Leaflet needs [lat, lon]
+                const route = data.features[0].geometry.coordinates.map((coord: number[]) => 
                     [coord[1], coord[0]] as [number, number]
                 );
+                
                 routeCache.set(cacheKey, route);
                 saveCachedRoutes();
                 return route;
             }
-        }
-    } catch (e) {
-        // FOSSGIS failed, try main OSRM
-    }
-    
-    // Fallback to Main OSRM Demo Server
-    try {
-        const response = await fetch(
-            `https://router.project-osrm.org/route/v1/foot/${start[1]},${start[0]};${end[1]},${end[0]}?overview=full&geometries=geojson`,
-            { signal: AbortSignal.timeout(5000) }
-        );
-        const data = await response.json();
-        if (data.routes?.[0]?.geometry?.coordinates) {
-            const route = data.routes[0].geometry.coordinates.map((coord: number[]) => 
-                [coord[1], coord[0]] as [number, number]
-            );
-            routeCache.set(cacheKey, route);
-            saveCachedRoutes();
-            return route;
+        } else {
+            console.warn(`ORS API error: ${response.status} ${response.statusText}`);
         }
     } catch (error) {
-        console.warn("All route fetch providers failed, using fallback");
+        console.warn("Route fetch failed:", error);
     }
     
-    // Final fallback: curved line (Bezier approximation)
-    const midLat = (start[0] + end[0]) / 2;
-    const midLng = (start[1] + end[1]) / 2;
-    const offset = Math.min(Math.abs(end[0] - start[0]), Math.abs(end[1] - start[1])) * 0.3;
-    return [
-        start,
-        [midLat + offset, midLng],
-        end
-    ];
+    // Final fallback: straight line
+    return [start, end];
 };
 
 function MapEvents({ onMapClick }: { onMapClick?: (lat: number, lng: number) => void }) {
@@ -176,6 +167,51 @@ function MapEvents({ onMapClick }: { onMapClick?: (lat: number, lng: number) => 
             }
         },
     });
+    return null;
+}
+
+// Auto-fit bounds to show all cameras and tracks
+function MapBoundsController({ sources, activeTracks }: { sources: any[], activeTracks: any[] }) {
+    const map = useMap();
+
+    useEffect(() => {
+        if ((!sources || sources.length === 0) && (!activeTracks || activeTracks.length === 0)) return;
+
+        const points: [number, number][] = [];
+
+        // Add camera locations
+        if (sources) {
+            sources.forEach(source => {
+                if (source.latitude && source.longitude) {
+                    points.push([source.latitude, source.longitude]);
+                }
+            });
+        }
+
+        // Add track points
+        if (activeTracks) {
+            activeTracks.forEach(track => {
+                if (track.pathPoints) {
+                    track.pathPoints.forEach((p: any) => {
+                        if (p.latitude && p.longitude) {
+                            points.push([p.latitude, p.longitude]);
+                        }
+                    });
+                }
+            });
+        }
+
+        if (points.length > 0) {
+            const bounds = L.latLngBounds(points);
+            map.fitBounds(bounds, { 
+                padding: [50, 50], 
+                maxZoom: 16,
+                animate: true,
+                duration: 1
+            });
+        }
+    }, [sources.length, activeTracks.length, map]);
+
     return null;
 }
 
@@ -214,10 +250,16 @@ export default function MultiTrackMap({
         color: track.color || TRACK_COLORS[idx % TRACK_COLORS.length],
     }));
 
+    // Create a stable key for detecting path changes
+    const pathsKey = tracksWithColors.map(t => `${t.globalId}:${t.pathPoints.length}:${t.pathPoints.map(p => p.camera_id).join(',')}`).join('|');
+
     // Interpolate routes for each track - PARALLEL fetching for speed
     useEffect(() => {
         const interpolateAll = async () => {
-            if (tracksWithColors.length === 0) return;
+            if (tracksWithColors.length === 0) {
+                setInterpolatedPaths(new Map());
+                return;
+            }
             
             setIsLoading(true);
             const newPaths = new Map<string, [number, number][]>();
@@ -251,7 +293,7 @@ export default function MultiTrackMap({
         };
 
         interpolateAll();
-    }, [tracksWithColors.length]);
+    }, [pathsKey]); // Re-run when tracks or their paths change
 
     return (
         <div className="relative h-full w-full">
@@ -298,6 +340,7 @@ export default function MultiTrackMap({
 
             <MapContainer center={center} zoom={zoom} scrollWheelZoom={true} className="h-full w-full rounded-lg" style={{ minHeight: '400px' }}>
                 <MapEvents onMapClick={onMapClick} />
+                <MapBoundsController sources={sources} activeTracks={mergedTracks} />
                 <TileLayer
                     attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
                     url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -320,7 +363,7 @@ export default function MultiTrackMap({
                     ) : null
                 ))}
 
-                {/* Track Paths */}
+                {/* Track Paths - Animated AntPath */}
                 {tracksWithColors.map(track => {
                     const path = interpolatedPaths.get(track.globalId) || [];
                     if (path.length === 0) return null;
@@ -328,13 +371,19 @@ export default function MultiTrackMap({
                     const isSelected = selectedTrackId === track.globalId;
                     
                     return (
-                        <Polyline 
+                        <AntPath 
                             key={track.globalId}
                             positions={path}
-                            color={track.color}
-                            weight={isSelected ? 6 : 4}
-                            opacity={isSelected ? 1 : 0.7}
-                            dashArray={isSelected ? undefined : '5, 10'}
+                            options={{
+                                color: track.color,
+                                pulseColor: '#FFFFFF',
+                                delay: 800,
+                                dashArray: [10, 20],
+                                weight: isSelected ? 6 : 4,
+                                opacity: isSelected ? 1 : 0.7,
+                                paused: false,
+                                reverse: false
+                            }}
                         />
                     );
                 })}

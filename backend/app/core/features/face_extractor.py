@@ -2,7 +2,7 @@
 Quality Scorer for Thumbnail Selection
 
 Simple quality scoring for selecting the best thumbnail from person crops.
-InsightFace has been removed - using FastReID for body-only ReID.
+InsightFace has been removed - using ReID for body-only features.
 """
 
 from typing import Optional, Tuple

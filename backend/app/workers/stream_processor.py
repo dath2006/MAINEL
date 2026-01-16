@@ -20,7 +20,25 @@ from app.services.stream_manager import get_stream_manager, FrameData, PlaybackS
 from app.services.tracking_service import get_tracking_service
 from app.services.reid_service import get_reid_service
 from app.services.track_store import get_track_store
+from app.services.identity_merger import get_identity_merger
 from app.api.v1.realtime import broadcast_event
+from app.schemas.track import TrackStatus
+from app.services.gallery_store import get_gallery_store
+from app.config import settings
+
+# Function to get scorer (lazy load to avoid heavy imports at root if needed)
+_quality_scorer = None
+def get_quality_scorer_instance():
+    global _quality_scorer
+    if _quality_scorer is None:
+        try:
+            from preprocessor.quality_scorer import QualityScorer
+            # Use settings for thresholds if available, otherwise defaults
+            _quality_scorer = QualityScorer()
+        except ImportError:
+            logger.warning("Could not import QualityScorer from preprocessor")
+    return _quality_scorer
+
 
 
 class StreamProcessor:
@@ -56,6 +74,10 @@ class StreamProcessor:
         # Sticky state for frame skipping
         self._last_detections = []
         self._last_tracks = []
+        
+        # Identity merger - check every N frames for fragmented identities
+        self._merge_check_interval = 100  # Check for merge candidates every 100 frames
+        self._last_merge_frame = 0
         
         logger.info("StreamProcessor initialized")
     
@@ -237,132 +259,127 @@ class StreamProcessor:
                 )
             )
             
-            # 2. Run ReID matching for confirmed tracks
+            # 2. Run ReID matching for confirmed tracks (Smart Filtered)
             if reid_service:
                 logger.info(f"ReID: Processing {len(tracks)} tracks")
-                for match_idx, track in enumerate(tracks):
+                quality_scorer = get_quality_scorer_instance()
+                
+                for track in tracks:
                     if not track.is_confirmed():
                         continue
-                        
+
+                    # Filter low confidence tracks for ReID too
+                    conf = float(track.confidence) if hasattr(track, 'confidence') else 0.0
+                    if conf < 0.5: 
+                         continue
+
                     # Find feature for this track
-                    # Note: tracking_service returns new_features as (uuid, feat) for NEW tracklets
-                    # But we need current feature. Track object stores history.
                     if not track.features:
-                        logger.warning(f"ReID: Track {track.track_id} has no features, skipping")
                         continue
                         
                     feature = track.features[-1] # Latest feature
-                    logger.info(f"ReID: Matching track {track.track_id} with feature shape {feature.shape}")
                     
                     try:
-                        match = loop.run_until_complete(
-                            reid_service.match_identity(
-                                camera_id=frame_data.camera_id,
-                                embedding=feature,
-                                timestamp=frame_data.timestamp,
-                            )
-                        )
+                        # Smart Filter: Check quality BEFORE matching/updating
+                        should_update = False
+                        quality_score = 0.0
+                        thumb_b64 = None
                         
-                        # Assign Global ID to Track
-                        track.global_id = str(match.global_track_id)
-                        logger.info(f"ReID: Track {track.track_id} -> Global ID {track.global_id} (is_new={match.is_new}, sim={match.visual_similarity:.2f})")
+                        bbox = track.to_tlbr()
+                        x1, y1, x2, y2 = map(int, bbox)
+                        h, w = frame_data.frame.shape[:2]
+                        x1, y1 = max(0, x1), max(0, y1)
+                        x2, y2 = min(w, x2), min(h, y2)
                         
-                        # Update TrackStore
-                        track_store = get_track_store()
-                        # Don't pass camera_sequence here to avoid overwriting history
-                        track_store.add_or_update_track(track.global_id, {
-                             # metadata updates if any
-                        })
+                        if x2 > x1 and y2 > y1 and quality_scorer:
+                             crop = frame_data.frame[y1:y2, x1:x2]
+                             
+                             # Assess Quality
+                             # Use simple crop scoring.
+                             q_result = quality_scorer.score(crop)
+                             quality_score = q_result.total_score
+                             
+                             # Threshold for Gallery Update (High Quality)
+                             # QualityScorer returns 0-100, configurable via GALLERY_QUALITY_THRESHOLD
+                             if quality_score > settings.gallery_quality_threshold:
+                                 should_update = True
+                                 
+                                 # Prepare thumbnail
+                                 thumb = cv2.resize(crop, (64, 128))
+                                 _, buffer = cv2.imencode('.jpg', thumb, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                                 thumb_b64 = base64.b64encode(buffer).decode('utf-8')
                         
-                        # Check for camera transition and broadcast path update
-                        track_data = track_store.get_track(track.global_id)
-                        previous_sequence = track_data.get("camera_sequence", []) if track_data else []
-                        prev_camera = previous_sequence[-1] if previous_sequence else None
-                        
-                        track_store.update_camera_sequence(track.global_id, frame_data.camera_id)
-                        
-                        # If camera changed, broadcast path update for map
-                        if prev_camera is not None and prev_camera != frame_data.camera_id:
-                            logger.info(f"Camera transition detected: {track.global_id} from {prev_camera} -> {frame_data.camera_id}")
-                            
-                            # Get updated track with full camera sequence
-                            updated_track = track_store.get_track(track.global_id)
-                            camera_seq = updated_track.get("camera_sequence", [])
-                            
-                            # Build path points from camera sequence
-                            stream_manager = get_stream_manager()
-                            path_points = []
-                            for cam_id in camera_seq:
-                                for source in stream_manager.sources:
-                                    if source.camera_id == cam_id:
-                                        path_points.append({
-                                            "camera_id": cam_id,
-                                            "latitude": source.latitude,
-                                            "longitude": source.longitude,
-                                            "name": source.name
-                                        })
-                                        break
-                            
-                            # Broadcast path update via WebSocket
-                            try:
-                                from app.api.v1.realtime import broadcast_track_path_update
-                                loop.create_task(
-                                    broadcast_track_path_update(
-                                        global_track_id=track.global_id,
-                                        camera_sequence=camera_seq,
-                                        path_points=path_points,
-                                        from_camera_id=prev_camera,
-                                        to_camera_id=frame_data.camera_id,
-                                    )
-                                )
-                            except Exception as ws_err:
-                                logger.warning(f"Failed to broadcast path update: {ws_err}")
+                        # Store quality info on track for visualization
+                        track.quality_score = quality_score
+                        track.pose = q_result.pose if hasattr(q_result, 'pose') else 'unknown'
+                        track.is_saved = should_update
 
-                        # Capture thumbnail with quality scoring (update if better quality)
-                        try:
-                            import cv2
-                            import base64
-                            from app.core.features.face_extractor import get_quality_scorer
-                            
-                            bbox = track.to_tlbr()  # [x1, y1, x2, y2]
-                            x1, y1, x2, y2 = map(int, bbox)
-                            
-                            # Clamp to frame bounds
-                            h, w = frame_data.frame.shape[:2]
-                            x1, y1 = max(0, x1), max(0, y1)
-                            x2, y2 = min(w, x2), min(h, y2)
-                            
-                            if x2 > x1 and y2 > y1:
-                                crop = frame_data.frame[y1:y2, x1:x2]
-                                
-                                # Calculate quality score with confidence and pose check
-                                quality_scorer = get_quality_scorer()
-                                conf = float(track.confidence) if hasattr(track, 'confidence') else 0.8
-                                quality = quality_scorer.score(crop, face_confidence=conf)
-                                
-                                # Resize to thumbnail size
-                                thumb = cv2.resize(crop, (64, 128))
-                                _, buffer = cv2.imencode('.jpg', thumb, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                                thumb_b64 = base64.b64encode(buffer).decode('utf-8')
-                                
-                                # Update thumbnail if quality is better
-                                reid_service.set_thumbnail(track.global_id, thumb_b64, quality)
-                                
-                                if match.is_new:
-                                    logger.info(f"Captured initial thumbnail for {track.global_id} (quality={quality:.2f})")
-                        except Exception as thumb_err:
-                            logger.warning(f"Failed to capture thumbnail: {thumb_err}")
+                        # Run Match Identity
+                        # We run matching to maintain ID, but only update gallery if quality is high.
+                        # Actually, if we skip matching on low quality, we might lose ID continuity across cameras?
+                        # No, DeepSORT maintains ID locally. ReID finds GLOBAL ID.
+                        # If we previously found a Global ID, we stick with it unless re-matched.
+                        # To minimize compute, we can only run ReID check:
+                        # 1. If Update needed (High Quality)
+                        # 2. If track has NO Global ID yet (First time seen)
                         
-                        results["reid_matches"].append({
-                            "local_track_id": track.track_id,
-                            "global_track_id": str(match.global_track_id),
-                            "visual_similarity": match.visual_similarity,
-                            "is_new": match.is_new,
-                        })
+                        current_global_id = getattr(track, 'global_id', None)
+                        
+                        if should_update or current_global_id is None:
+                             match = loop.run_until_complete(
+                                reid_service.match_identity(
+                                    camera_id=frame_data.camera_id,
+                                    embedding=feature,
+                                    timestamp=frame_data.timestamp,
+                                )
+                             )
+                             track.global_id = str(match.global_track_id)
+                             
+                             if should_update and thumb_b64:
+                                 # Add to multi-capture gallery (Top-K with diversity)
+                                 gallery_store = get_gallery_store()
+                                 gallery_store.add_capture(
+                                     global_id=track.global_id,
+                                     image_b64=thumb_b64,
+                                     quality_score=quality_score,
+                                     pose=q_result.pose if hasattr(q_result, 'pose') else 'unknown',
+                                     sharpness=q_result.sharpness_score if hasattr(q_result, 'sharpness_score') else 0.0,
+                                     frame_number=frame_data.frame_number,
+                                     timestamp=frame_data.timestamp,
+                                     embedding=feature  # Cache embedding for fast search
+                                 )
+                                 logger.debug(f"Added capture to gallery for {track.global_id} (Q={quality_score:.2f})")
+                                 
+                                 # Periodic identity merge check
+                                 if frame_data.frame_number - self._last_merge_frame >= self._merge_check_interval:
+                                     try:
+                                         identity_merger = get_identity_merger()
+                                         merge_count = identity_merger.run_merge_pass()
+                                         if merge_count > 0:
+                                             logger.info(f"IdentityMerger: Merged {merge_count} fragmented identities")
+                                         self._last_merge_frame = frame_data.frame_number
+                                     except Exception as e:
+                                         logger.warning(f"Identity merge check failed: {e}")
+                        # Store Global ID in track for persistence if needed
+                        # (DeepSORT track keeps attributes)
+                        
                     except Exception as e:
-                        logger.error(f"ReID error for track {track.track_id}: {e}")
+                        logger.error(f"ReID or Quality check error for track {track.track_id}: {e}")
+
+                    # Sync with TrackStore
+                    if getattr(track, 'global_id', None):
+                        try:
+                            track_store = get_track_store()
+                            track_store.add_or_update_track(
+                                track.global_id,
+                                {"status": TrackStatus.ACTIVE}
+                            )
+                            track_store.update_camera_sequence(track.global_id, frame_data.camera_id)
+                        except Exception as e:
+                            logger.error(f"Failed to update TrackStore: {e}")
 
             # 3. Convert tracks to serializable format (After ReID updates)
+
             for track in tracks:
                 # Filter low confidence tracks to reduce "fake boxes"
                 conf = float(track.confidence) if hasattr(track, 'confidence') else 0.0
@@ -375,8 +392,12 @@ class StreamProcessor:
                 # Get face_bbox and convert to serializable format
                 face_bbox = getattr(track, 'face_bbox', None)
                 if face_bbox is not None:
-                    face_bbox = [int(x) for x in face_bbox]  # Convert numpy int64 to Python int
-                
+                    face_bbox = [int(x) for x in face_bbox]
+
+                # Log face_bbox for debugging
+                if face_bbox is not None:
+                    logger.info(f"Track {track.track_id} has face_bbox: {face_bbox}")
+
                 results["tracks"].append({
                     "track_id": track.track_id,
                     "global_id": getattr(track, 'global_id', None), # Include Global ID
@@ -385,6 +406,9 @@ class StreamProcessor:
                     "confidence": conf,
                     "class_name": getattr(track, 'class_name', 'unknown'),
                     "state": track.state.name,
+                    "quality_score": getattr(track, 'quality_score', 0.0),
+                    "pose": getattr(track, 'pose', 'unknown'),
+                    "is_saved": getattr(track, 'is_saved', False),
                 })
             
         finally:
@@ -408,25 +432,40 @@ class StreamProcessor:
                 x1, y1, x2, y2 = map(int, bbox)
                 track_id = track["track_id"]
                 
-                # Draw person bounding box (green)
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                # Determine color based on quality score
+                quality_score = track.get("quality_score", 0.0)
+                is_saved = track.get("is_saved", False)
                 
-                # Draw face bounding box if detected (thin cyan)
+                if quality_score >= 70:
+                    color = (0, 255, 0)      # Green - Good
+                elif quality_score >= 40:
+                    color = (0, 255, 255)    # Yellow - Acceptable
+                else:
+                    color = (0, 0, 255)      # Red - Poor
+                
+                # Draw person bounding box
+                thickness = 3 if is_saved else 2
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
+                
+                # Draw face bounding box if detected (red)
                 face_bbox = track.get("face_bbox")
                 if face_bbox:
                     fx1, fy1, fx2, fy2 = map(int, face_bbox)
-                    cv2.rectangle(frame, (fx1, fy1), (fx2, fy2), (255, 255, 0), 1)
-                    # Optional: add small "face" label
-                    cv2.putText(
-                        frame, "face", (fx1, fy1 - 3),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 0), 1
-                    )
+                    cv2.rectangle(frame, (fx1, fy1), (fx2, fy2), (0, 0, 255), 2)
                 
-                # Draw label with ID
-                label = f"ID: {track_id}"
+                # Draw label with ID, Quality, Pose
+                pose = track.get("pose", "unknown")
+                label = f"ID:{track_id} Q:{quality_score:.0f} {pose}"
+                if is_saved:
+                    label += " [SAVED]"
+                
+                # Background for label text
+                (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
+                cv2.rectangle(frame, (x1, y1 - 20), (x1 + w, y1), color, -1)
+                
                 cv2.putText(
-                    frame, label, (x1, y1 - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2
+                    frame, label, (x1, y1 - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2
                 )
             
             # Encode frame as JPEG

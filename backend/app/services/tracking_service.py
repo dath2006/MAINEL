@@ -10,10 +10,19 @@ from uuid import UUID, uuid4
 import numpy as np
 from loguru import logger
 
-from app.core.detection import YOLODetector, Detection, get_detector
+from app.core.detection import Detection, get_detector as get_yolo_detector
 from app.core.tracking import DeepSORTTracker, Track, TrackState
 from app.core.features import OSNetExtractor, get_extractor
 from app.config import settings
+
+# Import PeopleNet Detector
+try:
+    from preprocessor.peoplenet_detector import PeopleNetDetector
+    PEOPLENET_AVAILABLE = True
+except ImportError as e:
+    PEOPLENET_AVAILABLE = False
+    logger.error(f"Could not import PeopleNetDetector: {e}")
+
 
 
 class CameraState:
@@ -40,9 +49,10 @@ class TrackingService:
     
     def __init__(
         self,
-        detector: Optional[YOLODetector] = None,
+        detector: Optional[object] = None,
         extractor: Optional[OSNetExtractor] = None,
     ):
+
         self.detector = detector
         self.extractor = extractor
         
@@ -55,24 +65,31 @@ class TrackingService:
         
         logger.info("TrackingService initialized")
     
-    def _get_detector(self) -> YOLODetector:
-        """Lazy load detector."""
+    def _get_detector(self) -> object:
+        """Lazy load detector (PeopleNet)."""
         if self.detector is None:
-            # Prefer ONNX path if use_onnx is enabled and ONNX model exists
-            import os
-            model_path = settings.yolo_model_path
-            if settings.use_onnx and settings.yolo_onnx_path:
-                if os.path.exists(settings.yolo_onnx_path):
-                    model_path = settings.yolo_onnx_path
-            
-            self.detector = get_detector(
-                model_path=model_path,
-                confidence=settings.yolo_confidence,
-                iou_threshold=settings.yolo_iou_threshold,
-                device=settings.device,
-                use_onnx=settings.use_onnx,
-            )
+            if PEOPLENET_AVAILABLE and settings.use_nvidia_reid:
+                # Use PeopleNet
+                model_path = settings.nvidia_reid_onnx_path # Or add new config for peoplenet model
+                # User provided path: backend/model_weights/resnet34_peoplenet.onnx
+                # Check if we should use a hardcoded path or add to config
+                # For now using a likely path or adding to settings later. 
+                # Let's assume settings.peoplenet_model_path exists or use a default.
+                peoplenet_path = getattr(settings, 'peoplenet_model_path', "model_weights/resnet34_peoplenet.onnx")
+                
+                logger.info(f"Initializing PeopleNetDetector from {peoplenet_path}")
+                self.detector = PeopleNetDetector(
+                    model_path=peoplenet_path,
+                    device=settings.device,
+                    confidence_threshold=settings.yolo_confidence, # Reuse yolo confidence
+                )
+            else:
+                # Fallback to YOLO if PeopleNet not available or config says so
+                logger.warning("PeopleNet not available, falling back to YOLO")
+                self.detector = get_yolo_detector()
         return self.detector
+
+
     
     def _get_extractor(self) -> OSNetExtractor:
         """Lazy load extractor."""
@@ -122,20 +139,136 @@ class TrackingService:
         detector = self._get_detector()
         
         # 1. Detection
-        detections = detector.detect(frame)
+        face_detections = []  # Face boxes from PeopleNet
         
-        # 2. Feature extraction using FastReID (if enabled)
+        # Check if detector is PeopleNetDetector by looking for its unique signature
+        is_peoplenet = hasattr(detector, 'CLASSES') and hasattr(detector, 'detect')
+        
+        if is_peoplenet:
+             # PeopleNet - get ALL detections (person, face, bag)
+             # Use lower threshold (0.3) to capture faces, then filter persons by stricter threshold
+             raw_all = detector.detect(frame, confidence_threshold=0.3)
+             
+             # Separate persons and faces with different confidence thresholds
+             # Persons: use 0.4 to capture more detections, faces: use 0.3 for sensitivity
+             person_dets = [d for d in raw_all if d.get('class_name') == 'person' and d.get('confidence', 0) >= 0.4]
+             face_dets = [d for d in raw_all if d.get('class_name') == 'face' and d.get('confidence', 0) >= 0.3]
+             
+             logger.info(f"PeopleNet detected {len(person_dets)} persons, {len(face_dets)} faces (raw: {len(raw_all)})")
+             
+             # Debug: Log class breakdown from raw detections
+             if len(raw_all) > 0:
+                 class_counts = {}
+                 for d in raw_all:
+                     cn = d.get('class_name', 'unknown')
+                     conf = d.get('confidence', 0)
+                     if cn not in class_counts:
+                         class_counts[cn] = []
+                     class_counts[cn].append(conf)
+                 for cn, confs in class_counts.items():
+                     logger.info(f"  -> {cn}: {len(confs)} detections, conf range: {min(confs):.2f}-{max(confs):.2f}")
+             
+             # Convert person detections to Detection objects
+             detections = []
+             for d in person_dets:
+                 detections.append(Detection(
+                     bbox=(float(d['x1']), float(d['y1']), float(d['x2']), float(d['y2'])),
+                     confidence=float(d['confidence']),
+                     class_id=0  # Person
+                 ))
+             
+             # Convert face detections for passthrough
+             for f in face_dets:
+                 face_detections.append({
+                     'x1': float(f['x1']),
+                     'y1': float(f['y1']),
+                     'x2': float(f['x2']),
+                     'y2': float(f['y2']),
+                     'confidence': float(f['confidence'])
+                 })
+        elif hasattr(detector, 'detect_persons'):
+              # Old PeopleNet API fallback
+              raw_detections = detector.detect_persons(frame, confidence_threshold=settings.yolo_confidence)
+              detections = []
+              for d in raw_detections:
+                  detections.append(Detection(
+                      bbox=(float(d['x1']), float(d['y1']), float(d['x2']), float(d['y2'])),
+                      confidence=float(d['confidence']),
+                      class_id=0  # Person
+                  ))
+        else:
+             # YOLO
+             detections = detector.detect(frame)
+        
+        # 2. Feature extraction (if enabled)
         features = None
         if extract_features and len(detections) > 0:
             extractor = self._get_extractor()
-            crops = detector.crop_detections(frame, detections)
+            # Crop detections
+            if hasattr(detector, 'crop_detections'):
+                 crops = detector.crop_detections(frame, detections)
+            else:
+                 # Manually crop if detector doesn't support it (PeopleNetDetector doesn't have crop_detections taking Detection objs)
+                 h, w = frame.shape[:2]
+                 crops = []
+                 for det in detections:
+                     x1, y1, x2, y2 = int(det.x1), int(det.y1), int(det.x2), int(det.y2)
+                     x1, y1 = max(0, x1), max(0, y1)
+                     x2, y2 = min(w, x2), min(h, y2)
+                     if x2 > x1 and y2 > y1:
+                         crops.append(frame[y1:y2, x1:x2])
+            
             if crops:
-                # Extract body features using FastReID
+                # Extract body features
                 features = extractor.extract_batch(crops)
         
         # 3. Predict and update tracker
         state.tracker.predict()
         active_tracks = state.tracker.update(detections, features)
+        
+        # 3b. Associate face boxes with person tracks (IOU matching)
+        def calc_iou(box1, box2):
+            """Calculate IOU between two boxes [x1, y1, x2, y2]."""
+            x1 = max(box1[0], box2[0])
+            y1 = max(box1[1], box2[1])
+            x2 = min(box1[2], box2[2])
+            y2 = min(box1[3], box2[3])
+            if x2 < x1 or y2 < y1:
+                return 0.0
+            inter = (x2 - x1) * (y2 - y1)
+            area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+            area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+            return inter / (area1 + area2 - inter + 1e-6)
+        
+        for track in active_tracks:
+            person_box = track.to_tlbr()  # [x1, y1, x2, y2]
+            best_face = None
+            best_score = 0.0  # Combined score instead of just IOU
+            
+            logger.debug(f"Track {track.track_id}: person_box={person_box.tolist()}, checking {len(face_detections)} faces")
+            
+            for face in face_detections:
+                face_box = [face['x1'], face['y1'], face['x2'], face['y2']]
+                iou = calc_iou(person_box, face_box)
+                
+                # Check containment (face center inside person box)
+                face_cx = (face_box[0] + face_box[2]) / 2
+                face_cy = (face_box[1] + face_box[3]) / 2
+                inside = (person_box[0] <= face_cx <= person_box[2] and
+                          person_box[1] <= face_cy <= person_box[3])
+                
+                logger.debug(f"  Face {face_box}: IOU={iou:.3f}, inside={inside}, face_center=({face_cx:.0f}, {face_cy:.0f})")
+                
+                # Accept face if EITHER inside OR has reasonable IOU
+                if inside or iou > 0.1:
+                    score = iou + (0.5 if inside else 0.0)  # Bonus for containment
+                    if score > best_score:
+                        best_score = score
+                        best_face = face_box
+            
+            track.face_bbox = best_face  # Will be None if no face found
+            if best_face:
+                logger.info(f"Track {track.track_id}: Associated face_bbox={best_face} (score={best_score:.3f})")
         
         # 4. Handle track lifecycle
         new_features = await self._handle_track_events(

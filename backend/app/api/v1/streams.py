@@ -130,6 +130,8 @@ async def add_source(request: AddSourceRequest):
 async def upload_video(
     camera_id: int = Form(...),
     name: str = Form(""),
+    latitude: float = Form(0.0),
+    longitude: float = Form(0.0),
     file: UploadFile = File(...),
 ):
     """Upload a video file and add as source."""
@@ -147,8 +149,8 @@ async def upload_video(
         source_path=file_path,
         source_type=SourceType.VIDEO_FILE,
         name=name or file.filename,
-        latitude=0.0, # TODO: Add lat/lon to upload form if needed
-        longitude=0.0,
+        latitude=latitude,
+        longitude=longitude,
     )
     
     if source is None:
@@ -300,3 +302,22 @@ async def clear_gallery():
     
     return {"status": "success", "message": "Gallery cleared"}
 
+
+@router.get("/gallery/{global_id}/captures")
+async def get_identity_captures(global_id: str):
+    """
+    Get all quality captures for a specific identity.
+    
+    Used by frontend gallery popup to show all images used for ReID matching.
+    Returns captures from GalleryStore (single source of truth).
+    """
+    from app.services.gallery_store import get_gallery_store
+    
+    gallery_store = get_gallery_store()
+    captures = gallery_store.get_captures(global_id)
+    
+    return {
+        "global_id": global_id,
+        "captures": captures,
+        "total": len(captures)
+    }
