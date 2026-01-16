@@ -47,7 +47,7 @@ class StreamProcessor:
     
     Pipeline:
     1. Get frame from StreamManager queue
-    2. Run YOLO detection
+    2. Run PeopleNet detection
     3. Run DeepSORT tracking
     4. Extract features
     5. Run ReID matching
@@ -308,10 +308,12 @@ class StreamProcessor:
                                  thumb = cv2.resize(crop, (64, 128))
                                  _, buffer = cv2.imencode('.jpg', thumb, [cv2.IMWRITE_JPEG_QUALITY, 80])
                                  thumb_b64 = base64.b64encode(buffer).decode('utf-8')
+                        else:
+                            q_result = None
                         
                         # Store quality info on track for visualization
                         track.quality_score = quality_score
-                        track.pose = q_result.pose if hasattr(q_result, 'pose') else 'unknown'
+                        track.pose = q_result.pose if q_result and hasattr(q_result, 'pose') else 'unknown'
                         track.is_saved = should_update
 
                         # Run Match Identity

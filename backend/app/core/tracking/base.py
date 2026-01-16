@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from typing import List
 import numpy as np
 
-from app.core.detection.yolo_detector import Detection
+from app.schemas.track import Detection
 
 
 class BaseTracker(ABC):

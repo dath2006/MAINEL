@@ -1,4 +1,8 @@
-version: '3.8'
+# ============================================
+# MCMT-ReID Backend - Standalone Docker Compose
+# ============================================
+# For running the backend independently with GPU support
+# Uses: PeopleNet + DeepSORT + Nvidia ReID pipeline
 
 services:
   api:
@@ -6,16 +10,31 @@ services:
     ports:
       - "8000:8000"
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       - DATABASE_URL=postgresql+asyncpg://mcmt:mcmt_password@db:5432/mcmt_reid
       - REDIS_URL=redis://redis:6379/0
       - OSRM_URL=http://osrm:5000
       - DEVICE=cuda
       - DEBUG=false
+      # ML Models
+      - PEOPLENET_MODEL_PATH=model_weights/resnet34_peoplenet.onnx
+      - NVIDIA_REID_ONNX_PATH=model_weights/resnet50_market1501_aicity156.onnx
+      - USE_NVIDIA_REID=true
+      - USE_ONNX=true
+      # Detection thresholds
+      - YOLO_CONFIDENCE=0.4
+      # ReID thresholds  
+      - REID_MATCH_THRESHOLD=0.40
+      - REID_NEW_THRESHOLD=0.50
+      # Quality thresholds
+      - GALLERY_QUALITY_THRESHOLD=55.0
     volumes:
       - ./model_weights:/app/model_weights
+      - ./uploads:/app/uploads
       - ./logs:/app/logs
     deploy:
       resources:

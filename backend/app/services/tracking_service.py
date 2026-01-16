@@ -10,9 +10,9 @@ from uuid import UUID, uuid4
 import numpy as np
 from loguru import logger
 
-from app.core.detection import Detection, get_detector as get_yolo_detector
+from app.schemas.track import Detection, BoundingBox
 from app.core.tracking import DeepSORTTracker, Track, TrackState
-from app.core.features import OSNetExtractor, get_extractor
+from app.core.features import NvidiaReIDExtractor
 from app.config import settings
 
 # Import PeopleNet Detector
@@ -50,7 +50,7 @@ class TrackingService:
     def __init__(
         self,
         detector: Optional[object] = None,
-        extractor: Optional[OSNetExtractor] = None,
+        extractor: Optional[NvidiaReIDExtractor] = None,
     ):
 
         self.detector = detector
@@ -68,13 +68,8 @@ class TrackingService:
     def _get_detector(self) -> object:
         """Lazy load detector (PeopleNet)."""
         if self.detector is None:
-            if PEOPLENET_AVAILABLE and settings.use_nvidia_reid:
+            if PEOPLENET_AVAILABLE:
                 # Use PeopleNet
-                model_path = settings.nvidia_reid_onnx_path # Or add new config for peoplenet model
-                # User provided path: backend/model_weights/resnet34_peoplenet.onnx
-                # Check if we should use a hardcoded path or add to config
-                # For now using a likely path or adding to settings later. 
-                # Let's assume settings.peoplenet_model_path exists or use a default.
                 peoplenet_path = getattr(settings, 'peoplenet_model_path', "model_weights/resnet34_peoplenet.onnx")
                 
                 logger.info(f"Initializing PeopleNetDetector from {peoplenet_path}")
@@ -84,28 +79,19 @@ class TrackingService:
                     confidence_threshold=settings.yolo_confidence, # Reuse yolo confidence
                 )
             else:
-                # Fallback to YOLO if PeopleNet not available or config says so
-                logger.warning("PeopleNet not available, falling back to YOLO")
-                self.detector = get_yolo_detector()
+                raise ImportError("PeopleNetDetector not available and YOLO fallback removed.")
         return self.detector
 
 
     
-    def _get_extractor(self) -> OSNetExtractor:
+    def _get_extractor(self) -> NvidiaReIDExtractor:
         """Lazy load extractor."""
         if self.extractor is None:
-            import os
-            model_path = None
-            # Prefer NVIDIA TAO model
-            if settings.use_nvidia_reid and settings.nvidia_reid_onnx_path:
-                if os.path.exists(settings.nvidia_reid_onnx_path):
-                     model_path = settings.nvidia_reid_onnx_path
-
-            self.extractor = get_extractor(
+            model_path = settings.nvidia_reid_onnx_path
+            logger.info(f"Initializing NvidiaReIDExtractor from {model_path}")
+            self.extractor = NvidiaReIDExtractor(
                 model_path=model_path,
-                device=settings.device,
-                use_onnx=settings.use_onnx,
-                use_nvidia=settings.use_nvidia_reid,
+                device=settings.device
             )
         return self.extractor
     
@@ -171,10 +157,19 @@ class TrackingService:
              # Convert person detections to Detection objects
              detections = []
              for d in person_dets:
+                 bbox = BoundingBox(
+                     x=float(d['x1']),
+                     y=float(d['y1']),
+                     width=float(d['x2'] - d['x1']),
+                     height=float(d['y2'] - d['y1']),
+                     confidence=float(d['confidence'])
+                 )
                  detections.append(Detection(
-                     bbox=(float(d['x1']), float(d['y1']), float(d['x2']), float(d['y2'])),
-                     confidence=float(d['confidence']),
-                     class_id=0  # Person
+                     camera_id=camera_id,
+                     timestamp=timestamp,
+                     bbox=bbox,
+                     class_id=0,
+                     class_name="person"
                  ))
              
              # Convert face detections for passthrough
@@ -197,8 +192,7 @@ class TrackingService:
                       class_id=0  # Person
                   ))
         else:
-             # YOLO
-             detections = detector.detect(frame)
+             raise ImportError("Unknown detector type or detector missing detect method.")
         
         # 2. Feature extraction (if enabled)
         features = None
