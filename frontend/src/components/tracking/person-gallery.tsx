@@ -3,18 +3,16 @@
 import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Users, Trash2, RefreshCw, X, Camera } from "lucide-react";
+import { Users, Trash2, RefreshCw, Camera } from "lucide-react";
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
+    Dialog,
+    DialogContent,
+    DialogHeader,
+    DialogTitle,
 } from "@/components/ui/dialog";
 
-
-const USE_MOCK = false; // for mock data: set to false later
+const USE_MOCK = false;
 
 interface PersonEntry {
     global_id: string;
@@ -32,52 +30,24 @@ interface CaptureEntry {
     timestamp: string | null;
 }
 
-const MOCK_PERSONS: PersonEntry[] = [ //for mock data
-    {
-        global_id: "mock-001",
-        last_camera_id: 1,
-        last_seen: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
-        appearance_count: 4,
-        thumbnail: null,
-    },
-    {
-        global_id: "mock-002",
-        last_camera_id: 3,
-        last_seen: new Date(Date.now() - 8 * 60 * 1000).toISOString(),
-        appearance_count: 2,
-        thumbnail: null,
-    },
-    {
-        global_id: "mock-003",
-        last_camera_id: 2,
-        last_seen: new Date(Date.now() - 25 * 60 * 1000).toISOString(),
-        appearance_count: 7,
-        thumbnail: null,
-    },
-];
-
-
 interface PersonGalleryProps {
     apiUrl?: string;
     refreshInterval?: number;
 }
 
-export function PersonGallery({ 
+export function PersonGallery({
     apiUrl = "http://localhost:8000/api/v1/streams",
-    refreshInterval = 5000 
+    refreshInterval = 5000
 }: PersonGalleryProps) {
     const [persons, setPersons] = useState<PersonEntry[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-
-    // Popup state
     const [selectedPerson, setSelectedPerson] = useState<string | null>(null);
     const [captures, setCaptures] = useState<CaptureEntry[]>([]);
     const [loadingCaptures, setLoadingCaptures] = useState(false);
 
-    // Fetch captures for a specific person
     const fetchCaptures = async (globalId: string) => {
-        if (USE_MOCK) return; 
+        if (USE_MOCK) return;
         try {
             setLoadingCaptures(true);
             const response = await fetch(`${apiUrl}/gallery/${globalId}/captures`);
@@ -97,12 +67,6 @@ export function PersonGallery({
     };
 
     const fetchGallery = async () => {
-
-        if(USE_MOCK){  // for mock data
-            setPersons(MOCK_PERSONS);
-            setError(null);
-            return;
-        }
         try {
             setLoading(true);
             const response = await fetch(`${apiUrl}/gallery`);
@@ -129,8 +93,6 @@ export function PersonGallery({
 
     useEffect(() => {
         fetchGallery();
-
-        if(USE_MOCK) return; // for mock data
         const interval = setInterval(fetchGallery, refreshInterval);
         return () => clearInterval(interval);
     }, [refreshInterval]);
@@ -139,96 +101,71 @@ export function PersonGallery({
         const date = new Date(isoString);
         const now = new Date();
         const diff = Math.floor((now.getTime() - date.getTime()) / 1000);
-        
-        if (diff < 60) return `${diff}s ago`;
-        if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-        if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-        return date.toLocaleDateString();
+        if (diff < 60) return `${diff}s`;
+        if (diff < 3600) return `${Math.floor(diff / 60)}m`;
+        if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
+        return 'OLD';
     };
 
     return (
-        <Card className="h-full">
-            <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                    <CardTitle className="flex items-center gap-2 text-lg">
-                        <Users className="h-5 w-5" />
-                        Person Gallery
-                        <Badge variant="secondary">{persons.length}</Badge>
-
-                        {USE_MOCK && ( // for mock data
-                        <Badge variant="secondary" className="ml-2">
-                            Mock
-                        </Badge>
-                        )}
-                    </CardTitle>
-                    <div className="flex gap-2">
-                        <Button 
-                            variant="outline" 
-                            size="sm" 
-                            onClick={fetchGallery}
-                            disabled={loading}
-                        >
-                            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-                        </Button>
-                        <Button 
-                            variant="destructive" 
-                            size="sm" 
-                            onClick={clearGallery}
-                            disabled={persons.length === 0}
-                        >
-                            <Trash2 className="h-4 w-4" />
-                        </Button>
-                    </div>
+        <div className="flex flex-col h-full bg-[#050505]">
+            <div className="flex items-center justify-between p-3 border-b border-[#262626]">
+                <span className="text-[10px] uppercase tracking-[0.2em] font-medium text-[#888] flex items-center gap-2">
+                    <Users className="h-3 w-3" />
+                    IDENTITY_LOG ({persons.length})
+                </span>
+                <div className="flex gap-1">
+                    <Button variant="ghost" size="icon" className="h-6 w-6 rounded-none text-[#666] hover:text-white" onClick={fetchGallery}>
+                        <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
+                    </Button>
+                    <Button variant="ghost" size="icon" className="h-6 w-6 rounded-none text-[#666] hover:text-red-500" onClick={clearGallery}>
+                        <Trash2 className="h-3 w-3" />
+                    </Button>
                 </div>
-            </CardHeader>
-            <CardContent>
-                {error && (
-                    <div className="text-sm text-destructive mb-2">{error}</div>
-                )}
-                <ScrollArea className="h-[400px]">
+            </div>
+
+            <div className="flex-1 overflow-hidden p-2">
+                {error && <div className="text-[10px] text-red-500 mb-2 font-mono">{error}</div>}
+
+                <ScrollArea className="h-full pr-2">
                     {persons.length === 0 ? (
-                        <div className="text-center text-muted-foreground py-8">
-                            No persons detected yet
+                        <div className="text-center py-8 text-[#333]">
+                            <p className="text-[10px] uppercase tracking-widest">Awaiting Detection...</p>
                         </div>
                     ) : (
-                        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3">
+                        <div className="grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-2">
                             {persons.map((person) => (
-                                <div 
+                                <div
                                     key={person.global_id}
-                                    className="border bg-card rounded-xl p-3 pt-6 flex flex-col items-center gap-2  drop-shadow-md hover:shadow-lg hover:translate-y-0.5 hover:bg-accent/20 hover:border-gray-400 transition-all "
+                                    className="group relative bg-black border border-[#262626] cursor-pointer hover:border-white transition-colors"
+                                    onClick={() => handlePersonClick(person.global_id)}
                                 >
-                                    {/* Thumbnail */}
-                                    <div 
-                                        className="w-full aspect-[9/16] ring-1 ring-border bg-muted rounded hover:ring-primary cursor-pointer overflow-hidden relative group"
-                                        onClick={() => handlePersonClick(person.global_id)}
-                                    >
-                                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors z-10 flex items-center justify-center opacity-0 group-hover:opacity-100">
-                                            <Camera className="text-white w-8 h-8 drop-shadow-md" />
-                                        </div>
+                                    <div className="aspect-[3/4] overflow-hidden grayscale group-hover:grayscale-0 transition-all bg-[#111]">
                                         {person.thumbnail ? (
-                                            <img 
+                                            <img
                                                 src={`data:image/jpeg;base64,${person.thumbnail}`}
-                                                alt={`Person ${person.global_id.slice(0, 8)}`}
-                                                className="w-full h-full object-cover"
+                                                className="w-full h-full object-cover opacity-70 group-hover:opacity-100 transition-opacity"
                                             />
                                         ) : (
-                                            <div className="w-full h-full flex items-center justify-center text-muted-foreground">
-                                                <Users className="h-8 w-8" />
+                                            <div className="w-full h-full flex items-center justify-center">
+                                                <Users className="h-6 w-6 text-[#333]" />
                                             </div>
                                         )}
+                                        {/* Corner Markers */}
+                                        <div className="absolute top-0 left-0 w-2 h-2 border-l border-t border-white/30" />
+                                        <div className="absolute top-0 right-0 w-2 h-2 border-r border-t border-white/30" />
+                                        <div className="absolute bottom-0 left-0 w-2 h-2 border-l border-b border-white/30" />
+                                        <div className="absolute bottom-0 right-0 w-2 h-2 border-r border-b border-white/30" />
                                     </div>
-                                    
-                                    {/* Info */}
-                                    <div className="text-center w-full">
-                                        <Badge  className="text-xs font-medium mt-1 mb-1">
-                                            {person.global_id.slice(0, 8)}
-                                        </Badge>
-                                        <div className="text-xs text-foreground">
-                                            Cam {person.last_camera_id}
+
+                                    <div className="p-2 border-t border-[#262626] bg-[#050505]">
+                                        <div className="flex justify-between items-center mb-1">
+                                            <span className="text-[9px] font-bold text-white bg-[#222] px-1 font-mono">{person.global_id.slice(0, 6)}</span>
+                                            <span className="text-[9px] font-mono text-[#666]">{formatTimeAgo(person.last_seen)}</span>
                                         </div>
-                                        <div className="text-xs text-muted-foreground">
-                                            {formatTimeAgo(person.last_seen)}<br/>
-                                            {person.appearance_count} obs
+                                        <div className="flex justify-between items-center text-[9px] text-[#555] font-mono uppercase">
+                                            <span>CAM_{person.last_camera_id}</span>
+                                            <span>CNT:{person.appearance_count}</span>
                                         </div>
                                     </div>
                                 </div>
@@ -236,54 +173,34 @@ export function PersonGallery({
                         </div>
                     )}
                 </ScrollArea>
-            </CardContent>
+            </div>
 
-            {/* Captures Modal */}
             <Dialog open={!!selectedPerson} onOpenChange={(open) => !open && setSelectedPerson(null)}>
-                <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
-                    <DialogHeader>
-                        <DialogTitle className="flex items-center gap-2">
-                            <Users className="h-5 w-5" />
-                            Identity: {selectedPerson?.slice(0, 8)}
-                        </DialogTitle>
+                <DialogContent className="border border-[#262626] bg-black p-0 max-w-4xl max-h-[80vh] overflow-hidden">
+                    <DialogHeader className="p-4 border-b border-[#262626]">
+                        <DialogTitle className="text-xs uppercase tracking-[0.2em] font-mono">Archive :: {selectedPerson?.slice(0, 8)}</DialogTitle>
                     </DialogHeader>
-                    
-                    {loadingCaptures ? (
-                        <div className="flex justify-center p-8">
-                            <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground" />
-                        </div>
-                    ) : captures.length === 0 ? (
-                        <div className="text-center text-muted-foreground p-8">
-                            No high-quality captures found for this identity.
-                        </div>
-                    ) : (
-                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 mt-4">
-                            {captures.map((cap, idx) => (
-                                <div key={idx} className="bg-muted rounded-lg overflow-hidden border">
-                                    <div className="aspect-[9/16] relative bg-black/5">
-                                        <img 
-                                            src={`data:image/jpeg;base64,${cap.image_b64}`}
-                                            alt={`Capture ${idx}`}
-                                            className="w-full h-full object-contain"
-                                        />
-                                        <div className="absolute top-2 right-2 flex flex-col items-end gap-1">
-                                            <Badge variant={cap.quality_score > 70 ? "default" : "secondary"}>
-                                                Q: {cap.quality_score.toFixed(0)}
-                                            </Badge>
-                                            <Badge variant="outline" className="bg-background/80">
-                                                {cap.pose}
-                                            </Badge>
+                    <div className="p-4 overflow-y-auto max-h-[70vh] bg-[#050505]">
+                        {loadingCaptures ? (
+                            <div className="flex justify-center p-8"><RefreshCw className="h-6 w-6 animate-spin text-[#333]" /></div>
+                        ) : (
+                            <div className="grid grid-cols-4 gap-2">
+                                {captures.map((cap, idx) => (
+                                    <div key={idx} className="bg-black border border-[#262626]">
+                                        <div className="aspect-[3/4] relative">
+                                            <img src={`data:image/jpeg;base64,${cap.image_b64}`} className="w-full h-full object-contain opacity-80" />
+                                            <span className="absolute top-1 right-1 bg-black/80 text-white text-[9px] px-1 font-mono">Q:{cap.quality_score.toFixed(0)}</span>
+                                        </div>
+                                        <div className="p-1 border-t border-[#262626] text-center">
+                                            <span className="text-[9px] text-[#555] font-mono">{cap.pose}</span>
                                         </div>
                                     </div>
-                                    <div className="p-2 text-xs text-center text-muted-foreground">
-                                        {cap.timestamp ? new Date(cap.timestamp).toLocaleTimeString() : 'Unknown time'}
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    )}
+                                ))}
+                            </div>
+                        )}
+                    </div>
                 </DialogContent>
             </Dialog>
-        </Card>
+        </div>
     );
 }

@@ -1,96 +1,100 @@
 'use client';
 
-import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import {
+  Users,
+  LayoutDashboard,
+  Map,
+  Settings,
+  Camera,
+  Radio,
+  BarChart,
+  HardDrive
+} from "lucide-react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { cn } from "@/lib/utils";
 import {
   Sidebar,
   SidebarContent,
-  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-} from '@/components/ui/sidebar';
-import { Badge } from '@/components/ui/badge';
-import {
-  LayoutDashboard,
-  Camera,
-  Users,
-  BarChart3,
-  Settings,
-  Activity,
-} from 'lucide-react';
+  SidebarFooter,
+} from "@/components/ui/sidebar";
+import { useEffect, useState } from "react";
 
 const navigation = [
-  { name: 'Dashboard', href: '/', icon: LayoutDashboard },
-  // { name: 'Cameras', href: '/cameras', icon: Camera }, // Removed
-  { name: 'Live Tracking', href: '/tracking', icon: Users },
-  { name: 'Analytics', href: '/analytics', icon: BarChart3 },
-  { name: 'Settings', href: '/settings', icon: Settings },
+  { name: "Live Track", href: "/tracking", icon: Map },
 ];
 
-interface AppSidebarProps {
-  isConnected?: boolean;
-}
-
-export function AppSidebar({ isConnected = false }: AppSidebarProps) {
+export function AppSidebar() {
   const pathname = usePathname();
+  const [mounted, setMounted] = useState(false);
+  const [wsState, setWsState] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+    // Mock FS state check
+    const interval = setInterval(() => setWsState(prev => !prev), 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  if (!mounted) return null;
 
   return (
-    <Sidebar>
-      <SidebarHeader className="border-b px-6 py-4">
-        <div className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-            <Activity className="h-4 w-4" />
-          </div>
-          <div>
-            <h1 className="text-lg font-semibold">MCMT-ReID</h1>
-            <p className="text-xs text-muted-foreground">Multi-Camera Tracking</p>
-          </div>
+    <Sidebar className="border-r border-[#262626] bg-[#000000] w-[64px]" collapsible="none">
+      {/* Heavy Top Slab */}
+      <SidebarHeader className="h-14 border-b border-[#262626] flex items-center justify-center bg-black">
+        <div className="w-8 h-8 bg-white flex items-center justify-center">
+          <div className="w-4 h-4 bg-black rounded-full" />
         </div>
       </SidebarHeader>
 
-      <SidebarContent>
+      <SidebarContent className="bg-black py-4">
         <SidebarGroup>
-          <SidebarGroupLabel>Navigation</SidebarGroupLabel>
           <SidebarGroupContent>
-            <SidebarMenu>
-              {navigation.map((item) => (
-                <SidebarMenuItem key={item.name}>
-                  <SidebarMenuButton
-                    asChild
-                    isActive={pathname === item.href}
-                  >
-                    <Link href={item.href}>
-                      <item.icon className="h-4 w-4" />
-                      <span>{item.name}</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
+            <SidebarMenu className="gap-2 px-2">
+              {navigation.map((item) => {
+                const isActive = pathname === item.href;
+                return (
+                  <SidebarMenuItem key={item.name}>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={isActive}
+                      className={cn(
+                        "h-10 w-10 justify-center rounded-none transition-none border border-transparent",
+                        isActive
+                          ? "bg-white text-black hover:bg-white hover:text-black"
+                          : "bg-[#111] text-[#666] hover:bg-[#222] hover:text-[#888] hover:border-[#333]"
+                      )}
+                      tooltip={item.name}
+                    >
+                      <Link href={item.href}>
+                        <item.icon className="h-4 w-4" />
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                );
+              })}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
 
-      <SidebarFooter className="border-t p-4">
-        <div className="flex items-center gap-2">
-          <div
-            className={`h-2 w-2 rounded-full ${
-              isConnected ? 'bg-green-500' : 'bg-red-500'
-            }`}
-          />
-          <span className="text-sm text-muted-foreground">
-            {isConnected ? 'Connected' : 'Disconnected'}
-          </span>
-          {isConnected && (
-            <Badge variant="outline" className="ml-auto text-xs">
-              Live
-            </Badge>
-          )}
+      <SidebarFooter className="border-t border-[#262626] p-0 bg-black">
+        <div className="flex flex-col items-center gap-2 py-4">
+          {/* Status Indicators */}
+          <div className="w-10 h-10 border border-[#262626] bg-[#050505] flex flex-col items-center justify-center gap-1">
+            <div className={cn("w-1.5 h-1.5 rounded-full", wsState ? "bg-white" : "bg-[#333]")} />
+            <span className="text-[8px] text-[#444] font-mono">NET</span>
+          </div>
+          <div className="w-10 h-10 border border-[#262626] bg-[#050505] flex flex-col items-center justify-center gap-1">
+            <div className="w-1.5 h-1.5 rounded-full bg-[#333]" />
+            <span className="text-[8px] text-[#444] font-mono">REC</span>
+          </div>
         </div>
       </SidebarFooter>
     </Sidebar>

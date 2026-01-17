@@ -1,35 +1,35 @@
 'use client';
 
 import { create } from 'zustand';
-import type { Camera, Track, SystemHealth } from './api';
+import type { Camera, GlobalTrack, SystemHealth } from './api';
 
 interface AppState {
   // System
   systemHealth: SystemHealth | null;
   isConnected: boolean;
-  
+
   // Cameras
   cameras: Camera[];
   selectedCamera: Camera | null;
-  
+
   // Tracks
-  activeTracks: Track[];
-  selectedTrack: Track | null;
-  
+  activeTracks: GlobalTrack[];
+  selectedTrack: GlobalTrack | null;
+
   // Real-time events
   recentEvents: Array<{
     type: string;
     data: unknown;
     timestamp: Date;
   }>;
-  
+
   // Actions
   setSystemHealth: (health: SystemHealth) => void;
   setConnected: (connected: boolean) => void;
   setCameras: (cameras: Camera[]) => void;
   selectCamera: (camera: Camera | null) => void;
-  setActiveTracks: (tracks: Track[]) => void;
-  selectTrack: (track: Track | null) => void;
+  setActiveTracks: (tracks: GlobalTrack[]) => void;
+  selectTrack: (track: GlobalTrack | null) => void;
   addEvent: (type: string, data: unknown) => void;
 }
 
@@ -42,7 +42,7 @@ export const useAppStore = create<AppState>((set) => ({
   activeTracks: [],
   selectedTrack: null,
   recentEvents: [],
-  
+
   // Actions
   setSystemHealth: (health) => set({ systemHealth: health }),
   setConnected: (connected) => set({ isConnected: connected }),

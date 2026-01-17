@@ -1,0 +1,51 @@
+
+# 2. Add extra index for torch
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+# Core libraries
+fastapi
+uvicorn
+python-dotenv
+requests
+pydantic
+pydantic-settings
+SQLAlchemy
+alembic
+psycopg2-binary
+redis
+aioredis
+websockets
+
+# ML/CV libraries
+numpy
+pandas
+# insightface  <-- Installed separately via wheel
+opencv-python
+opencv-python-headless
+pillow
+scikit-learn
+scikit-image
+filterpy
+lapx
+# boxmot  <-- removed for now if not compatible, or install carefully
+ultralytics
+# nvidia-pyindex <-- REMOVED due to path issues
+# torch installed separately
+torch
+torchvision
+torchaudio
+torchreid
+
+# Telemetry/Ops
+tensorboard
+prometheus-client
+
+# Utilities
+tqdm
+pyyaml
+click
+colorama
+regex
+protobuf
+onnx
+onnxruntime-gpu

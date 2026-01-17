@@ -112,7 +112,7 @@ if (typeof window !== 'undefined') {
 // OpenRouteService routing
 const fetchRoute = async (start: [number, number], end: [number, number]): Promise<[number, number][]> => {
     const cacheKey = getCacheKey(start, end);
-    
+
     // Check cache first
     if (routeCache.has(cacheKey)) {
         return routeCache.get(cacheKey)!;
@@ -125,12 +125,12 @@ const fetchRoute = async (start: [number, number], end: [number, number]): Promi
         console.warn('No ORS API key found, using straight lines');
         return [start, end];
     }
-    
+
     try {
         // ORS expects [lon, lat]
         const startLngLat = `${start[1]},${start[0]}`;
         const endLngLat = `${end[1]},${end[0]}`;
-        
+
         const response = await fetch(
             `https://api.openrouteservice.org/v2/directions/foot-walking?api_key=${apiKey}&start=${startLngLat}&end=${endLngLat}`
         );
@@ -140,10 +140,10 @@ const fetchRoute = async (start: [number, number], end: [number, number]): Promi
             // Check for valid GeoJSON response
             if (data.features?.[0]?.geometry?.coordinates) {
                 // ORS returns [lon, lat], Leaflet needs [lat, lon]
-                const route = data.features[0].geometry.coordinates.map((coord: number[]) => 
+                const route = data.features[0].geometry.coordinates.map((coord: number[]) =>
                     [coord[1], coord[0]] as [number, number]
                 );
-                
+
                 routeCache.set(cacheKey, route);
                 saveCachedRoutes();
                 return route;
@@ -154,7 +154,7 @@ const fetchRoute = async (start: [number, number], end: [number, number]): Promi
     } catch (error) {
         console.warn("Route fetch failed:", error);
     }
-    
+
     // Final fallback: straight line
     return [start, end];
 };
@@ -203,8 +203,8 @@ function MapBoundsController({ sources, activeTracks }: { sources: any[], active
 
         if (points.length > 0) {
             const bounds = L.latLngBounds(points);
-            map.fitBounds(bounds, { 
-                padding: [50, 50], 
+            map.fitBounds(bounds, {
+                padding: [50, 50],
                 maxZoom: 16,
                 animate: true,
                 duration: 1
@@ -220,14 +220,14 @@ function MapBoundsController({ sources, activeTracks }: { sources: any[], active
  * 
  * Real-time updates via WebSocket when tracks move between cameras.
  */
-export default function MultiTrackMap({ 
-    sources, 
-    activeTracks = [], 
+export default function MultiTrackMap({
+    sources,
+    activeTracks = [],
     selectedTrackId,
-    center = [12.9716, 77.5946], 
-    zoom = 13, 
+    center = [12.9716, 77.5946],
+    zoom = 13,
     onMapClick,
-    onTrackSelect 
+    onTrackSelect
 }: MultiTrackMapProps) {
     const [interpolatedPaths, setInterpolatedPaths] = useState<Map<string, [number, number][]>>(new Map());
     const [isLoading, setIsLoading] = useState(false);
@@ -260,10 +260,10 @@ export default function MultiTrackMap({
                 setInterpolatedPaths(new Map());
                 return;
             }
-            
+
             setIsLoading(true);
             const newPaths = new Map<string, [number, number][]>();
-            
+
             // Fetch all routes in parallel
             await Promise.all(tracksWithColors.map(async (track) => {
                 if (track.pathPoints.length < 2) {
@@ -282,12 +282,12 @@ export default function MultiTrackMap({
                         fetchRoute([start.latitude, start.longitude], [end.latitude, end.longitude])
                     );
                 }
-                
+
                 const segments = await Promise.all(segmentPromises);
                 const fullPath = segments.flat();
                 newPaths.set(track.globalId, fullPath);
             }));
-            
+
             setInterpolatedPaths(newPaths);
             setIsLoading(false);
         };
@@ -298,11 +298,10 @@ export default function MultiTrackMap({
     return (
         <div className="relative h-full w-full">
             {/* Connection status indicator */}
-            <div className={`absolute top-3 right-3 z-[1000] flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium ${
-                connected 
-                    ? 'bg-green-500/20 text-green-400 border border-green-500/30' 
-                    : 'bg-zinc-700/50 text-white border border-zinc-600/30'
-            }`}>
+            <div className={`absolute top-3 right-3 z-[1000] flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium ${connected
+                ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                : 'bg-zinc-700/50 text-white border border-zinc-600/30'
+                }`}>
                 <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500 animate-pulse' : 'bg-zinc-500'}`} />
                 {connected ? 'Live' : 'Offline'}
             </div>
@@ -313,16 +312,15 @@ export default function MultiTrackMap({
                     <h4 className="text-xs font-semibold text-zinc-400 mb-2">Tracked Persons</h4>
                     <div className="space-y-1.5 max-h-32 overflow-y-auto">
                         {tracksWithColors.map(track => (
-                            <div 
+                            <div
                                 key={track.globalId}
-                                className={`flex items-center gap-2 px-2 py-1 rounded cursor-pointer transition-colors ${
-                                    selectedTrackId === track.globalId 
-                                        ? 'bg-zinc-700/50' 
-                                        : 'hover:bg-zinc-800/50'
-                                }`}
+                                className={`flex items-center gap-2 px-2 py-1 rounded cursor-pointer transition-colors ${selectedTrackId === track.globalId
+                                    ? 'bg-zinc-700/50'
+                                    : 'hover:bg-zinc-800/50'
+                                    }`}
                                 onClick={() => onTrackSelect?.(track.globalId)}
                             >
-                                <div 
+                                <div
                                     className="w-3 h-3 rounded-full border border-white/30"
                                     style={{ backgroundColor: track.color }}
                                 />
@@ -342,15 +340,15 @@ export default function MultiTrackMap({
                 <MapEvents onMapClick={onMapClick} />
                 <MapBoundsController sources={sources} activeTracks={mergedTracks} />
                 <TileLayer
-                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-                    url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                    attribution='&copy; <a href="https://stadiamaps.com/">Stadia Maps</a>, &copy; <a href="https://openmaptiles.org/">OpenMapTiles</a> &copy; <a href="http://openstreetmap.org">OpenStreetMap</a> contributors'
+                    url="https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png"
                 />
-                
+
                 {/* Camera Markers */}
                 {sources.map(source => (
                     source.latitude && source.longitude ? (
-                        <Marker 
-                            key={source.id} 
+                        <Marker
+                            key={source.id}
                             position={[source.latitude, source.longitude]}
                             icon={cameraIcon(source.is_active)}
                         >
@@ -369,9 +367,9 @@ export default function MultiTrackMap({
                     if (path.length === 0) return null;
 
                     const isSelected = selectedTrackId === track.globalId;
-                    
+
                     return (
-                        <AntPath 
+                        <AntPath
                             key={track.globalId}
                             positions={path}
                             options={{
@@ -389,17 +387,17 @@ export default function MultiTrackMap({
                 })}
 
                 {/* Path Point Markers */}
-                {tracksWithColors.map(track => 
+                {tracksWithColors.map(track =>
                     track.pathPoints.map((point, index) => (
-                        <Marker 
+                        <Marker
                             key={`${track.globalId}-${index}`}
                             position={[point.latitude, point.longitude]}
                             icon={createCustomIcon(track.color!, index + 1)}
                             zIndexOffset={selectedTrackId === track.globalId ? 2000 : 1000}
                         >
                             <Popup>
-                                <strong>Step {index + 1}</strong><br/>
-                                {point.name}<br/>
+                                <strong>Step {index + 1}</strong><br />
+                                {point.name}<br />
                                 Camera ID: {point.camera_id}
                             </Popup>
                         </Marker>
