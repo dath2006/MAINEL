@@ -1,20 +1,14 @@
-'use client';
-
-import { useState } from 'react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Slider } from '@/components/ui/slider';
-import { Play, Pause, Square, RefreshCw } from 'lucide-react';
+import { Play, Pause, Square, Activity, Settings2 } from "lucide-react";
+import { Slider } from "@/components/ui/slider";
+import { Button } from "@/components/ui/button";
 
 interface StreamControlsProps {
   onPlay: () => void;
   onPause: () => void;
   onStop: () => void;
-  state: 'stopped' | 'playing' | 'paused';
+  state: 'playing' | 'paused' | 'stopped';
   sourceCount: number;
-  fps?: number;
-  onFpsChange?: (fps: number) => void;
+
 }
 
 export function StreamControls({
@@ -23,70 +17,60 @@ export function StreamControls({
   onStop,
   state,
   sourceCount,
-  fps = 30,
-  onFpsChange,
 }: StreamControlsProps) {
-  const [targetFps, setTargetFps] = useState(fps);
-
-  const handleFpsChange = (value: number[]) => {
-    const newFps = value[0];
-    setTargetFps(newFps);
-    onFpsChange?.(newFps);
-  };
-
   return (
-
-      <div className="flex flex-wrap items-center justify-between gap-4 border-2 p-2 rounded-lg">
-        {/* Playback Controls */}
-        <div className="flex items-center gap-2">
-          {state === 'playing' ? (
-            <Button variant="outline" size="sm" onClick={onPause}>
-              <Pause className="mr-2 h-4 w-4 " />
-              Pause
-            </Button>
-          ) : (
-            <Button size="sm" onClick={onPlay} disabled={sourceCount === 0}>
-              <Play className="mr-2 h-4 w-4" />
-              Play
-            </Button>
-          )}
-          
-          <Button
-            variant="destructive"
-            size="sm"
-            onClick={onStop}
-            disabled={state === 'stopped'}
-          >
-            <Square className="mr-2 h-4 w-4" />
-            Stop
-          </Button>
-        </div>
-
-        {/* Status */}
-        <div className="flex items-center gap-3">
-          <Badge variant={state === 'playing' ? 'default' : 'secondary'}>
-            {state.charAt(0).toUpperCase() + state.slice(1)}
-          </Badge>
-          <span className="text-sm text-muted-foreground">
-            {sourceCount} source{sourceCount !== 1 ? 's' : ''} active
-          </span>
-        </div>
-
-        {/* FPS Control */}
-        <div className="flex items-center gap-3">
-          <span className="text-sm text-muted-foreground">FPS:</span>
-          <div className="w-32">
-            <Slider
-              value={[targetFps]}
-              min={1}
-              max={60}
-              step={1}
-              onValueChange={handleFpsChange}
-            />
-          </div>
-          <span className="w-8 text-sm font-medium">{targetFps}</span>
-        </div>
+    <div className="bg-[#050505] border border-[#262626] p-1 flex items-center gap-1 shadow-2xl">
+      {/* Playback Group */}
+      <div className="flex items-center">
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={onPlay}
+          disabled={state === 'playing'}
+          className="h-8 w-8 rounded-none hover:bg-white hover:text-black disabled:opacity-30 text-[#888]"
+        >
+          <Play className="h-3 w-3 fill-current" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={onPause}
+          disabled={state === 'paused' || state === 'stopped'}
+          className="h-8 w-8 rounded-none hover:bg-white hover:text-black disabled:opacity-30 text-[#888]"
+        >
+          <Pause className="h-3 w-3 fill-current" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={onStop}
+          className="h-8 w-8 rounded-none hover:bg-red-900 hover:text-white text-[#888]"
+        >
+          <Square className="h-3 w-3 fill-current" />
+        </Button>
       </div>
 
+      <div className="w-px h-4 bg-[#262626] mx-1" />
+
+      {/* Stats Group */}
+      <div className="flex items-center gap-3 px-2">
+        <div className="flex flex-col items-center">
+          <span className="text-[8px] uppercase text-[#444] tracking-wider">Sources</span>
+          <span className="text-xs font-mono font-bold text-white">{sourceCount}</span>
+        </div>
+
+      </div>
+
+      {/* Status Indicator */}
+      <div className={`
+            ml-2 h-8 px-3 flex items-center gap-2 border-l border-[#262626]
+            ${state === 'playing' ? 'bg-[#0a200a]' : 'bg-[#0a0a0a]'}
+       `}>
+        <div className={`w-1.5 h-1.5 rounded-full ${state === 'playing' ? 'bg-green-500 animate-pulse' : 'bg-red-900'}`} />
+        <span className={`text-[9px] uppercase tracking-widest font-mono ${state === 'playing' ? 'text-green-500' : 'text-red-900'}`}>
+          {state}
+        </span>
+      </div>
+    </div>
   );
 }

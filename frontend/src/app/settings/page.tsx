@@ -8,47 +8,84 @@ import { Separator } from '@/components/ui/separator';
 
 export default function SettingsPage() {
   return (
-    <div className="flex flex-1 flex-col">
-      <Header title="Settings" />
-      
-      <main className="flex-1 space-y-6 p-6">
-        <Card>
-          <CardHeader>
-            <CardTitle>API Configuration</CardTitle>
-            <CardDescription>Configure backend connection settings</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Backend URL</label>
-              <Input defaultValue="http://localhost:8000" />
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium">WebSocket URL</label>
-              <Input defaultValue="ws://localhost:8000/api/v1/ws/tracks" />
-            </div>
-            <Button>Save Configuration</Button>
-          </CardContent>
-        </Card>
+    <div className="flex flex-1 flex-col bg-black text-white font-mono h-screen overflow-hidden">
+      <Header title="SYSTEM_CONFIG" />
 
-        <Separator />
+      <main className="flex-1 overflow-y-auto p-8 max-w-4xl mx-auto w-full space-y-8">
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Detection Settings</CardTitle>
-            <CardDescription>Configure YOLO detection parameters</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Confidence Threshold</label>
-              <Input type="number" step="0.1" min="0" max="1" defaultValue="0.5" />
+        {/* Network Configuration */}
+        <section>
+          <div className="flex items-center gap-4 mb-4">
+            <h2 className="text-xs uppercase tracking-[0.2em] text-[#888]">Network_Interface</h2>
+            <div className="h-px bg-[#262626] flex-1" />
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="group space-y-2">
+              <label className="text-[10px] uppercase tracking-widest text-[#666] group-focus-within:text-white transition-colors">Backend Endpoint</label>
+              <Input
+                defaultValue="http://localhost:8000"
+                className="rounded-none border-[#262626] bg-[#050505] text-xs h-10 px-4 focus-visible:ring-0 focus-visible:border-white transition-colors"
+              />
             </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium">IOU Threshold</label>
-              <Input type="number" step="0.1" min="0" max="1" defaultValue="0.45" />
+            <div className="group space-y-2">
+              <label className="text-[10px] uppercase tracking-widest text-[#666] group-focus-within:text-white transition-colors">WebSocket Stream</label>
+              <Input
+                defaultValue="ws://localhost:8000/api/v1/ws/tracks"
+                className="rounded-none border-[#262626] bg-[#050505] text-xs h-10 px-4 focus-visible:ring-0 focus-visible:border-white transition-colors"
+              />
             </div>
-            <Button>Update Settings</Button>
-          </CardContent>
-        </Card>
+          </div>
+        </section>
+
+        {/* Detection Parameters */}
+        <section>
+          <div className="flex items-center gap-4 mb-4">
+            <h2 className="text-xs uppercase tracking-[0.2em] text-[#888]">Inference_Engine</h2>
+            <div className="h-px bg-[#262626] flex-1" />
+          </div>
+
+          <div className="bg-[#050505] border border-[#262626] p-6 space-y-6">
+            <div className="flex items-center justify-between">
+              <div className="space-y-1">
+                <label className="text-xs font-bold uppercase tracking-wider block">Confidence Threshold</label>
+                <p className="text-[10px] text-[#666] max-w-[300px]">Minimum probability required for object classification acceptance.</p>
+              </div>
+              <div className="w-24">
+                <Input
+                  type="number"
+                  step="0.05"
+                  defaultValue="0.5"
+                  className="text-right rounded-none border-b border-t-0 border-l-0 border-r-0 border-[#333] bg-transparent focus-visible:ring-0 focus-visible:border-white h-auto py-1 px-0 font-mono text-sm"
+                />
+              </div>
+            </div>
+
+            <div className="h-px bg-[#111]" />
+
+            <div className="flex items-center justify-between">
+              <div className="space-y-1">
+                <label className="text-xs font-bold uppercase tracking-wider block">IOU Threshold</label>
+                <p className="text-[10px] text-[#666] max-w-[300px]">Intersection over Union threshold for non-maximum suppression.</p>
+              </div>
+              <div className="w-24">
+                <Input
+                  type="number"
+                  step="0.05"
+                  defaultValue="0.45"
+                  className="text-right rounded-none border-b border-t-0 border-l-0 border-r-0 border-[#333] bg-transparent focus-visible:ring-0 focus-visible:border-white h-auto py-1 px-0 font-mono text-sm"
+                />
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <div className="pt-4 flex justify-end">
+          <Button className="rounded-none bg-white text-black hover:bg-[#ccc] uppercase tracking-widest text-xs h-10 px-8">
+            Apply_Configuration
+          </Button>
+        </div>
+
       </main>
     </div>
   );

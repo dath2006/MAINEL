@@ -1,13 +1,10 @@
-'use client';
-
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Camera, Users, Activity, Cpu } from 'lucide-react';
+import { Users, Video, Activity, Eye } from "lucide-react";
 
 interface StatsCardsProps {
-  activeTracks: number;
-  totalCameras: number;
-  activeCameras: number;
-  detectionsPerSecond: number;
+  activeTracks?: number;
+  totalCameras?: number;
+  activeCameras?: number;
+  detectionsPerSecond?: number;
 }
 
 export function StatsCards({
@@ -18,48 +15,56 @@ export function StatsCards({
 }: StatsCardsProps) {
   const stats = [
     {
-      title: 'Active Tracks',
+      label: 'TARGETS_ACTIVE',
       value: activeTracks,
-      icon: Users,
-      description: 'People being tracked',
-      color: 'text-blue-500',
+      sub: 'Tracking',
+      highlight: true
     },
     {
-      title: 'Total Cameras',
-      value: totalCameras,
-      icon: Camera,
-      description: `${activeCameras} active`,
-      color: 'text-green-500',
+      label: 'CAMERA_NODES',
+      value: `${activeCameras}/${totalCameras}`,
+      sub: 'Online',
+      highlight: false
     },
     {
-      title: 'Detections/sec',
+      label: 'PROCESS_RATE',
       value: detectionsPerSecond.toFixed(1),
-      icon: Activity,
-      description: 'Real-time processing',
-      color: 'text-purple-500',
+      sub: 'Items/Sec',
+      highlight: false
     },
     {
-      title: 'GPU Usage',
-      value: '45%',
-      icon: Cpu,
-      description: 'CUDA acceleration',
-      color: 'text-orange-500',
+      label: 'SYS_UPTIME',
+      value: '04:22:19',
+      sub: 'Stable',
+      highlight: false
     },
   ];
 
   return (
-    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-      {stats.map((stat) => (
-        <Card key={stat.title}>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">{stat.title}</CardTitle>
-            <stat.icon className={`h-4 w-4 ${stat.color}`} />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stat.value}</div>
-            <p className="text-xs text-muted-foreground">{stat.description}</p>
-          </CardContent>
-        </Card>
+    <div className="grid grid-cols-2 lg:grid-cols-4 border-y border-[#262626] bg-black">
+      {stats.map((stat, i) => (
+        <div
+          key={i}
+          className={`
+                p-6 border-r border-[#262626] last:border-r-0 
+                flex flex-col justify-between h-32
+                hover:bg-[#050505] transition-colors group
+            `}
+        >
+          <div className="flex justify-between items-start">
+            <span className="text-[10px] uppercase tracking-[0.2em] text-[#666] group-hover:text-[#888]">{stat.label}</span>
+            {stat.highlight && <div className="w-1.5 h-1.5 bg-white animate-pulse" />}
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <span className="text-3xl font-light font-mono text-white tracking-tighter">
+              {stat.value}
+            </span>
+            <span className="text-[10px] uppercase text-[#444] tracking-widest font-mono group-hover:text-[#666]">
+              [{stat.sub}]
+            </span>
+          </div>
+        </div>
       ))}
     </div>
   );
