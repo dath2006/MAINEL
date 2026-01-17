@@ -1,6 +1,7 @@
 services:
   # ============================================
   # Backend - FastAPI with ML Pipeline
+  # PeopleNet + DeepSORT + Nvidia ReID
   # ============================================
   backend:
     build:
@@ -15,16 +16,31 @@ services:
       - OSRM_URL=http://osrm:5000
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
+      # Device - override with GPU compose file for CUDA
+      - DEVICE=cpu
+      # ML Models
+      - PEOPLENET_MODEL_PATH=model_weights/resnet34_peoplenet.onnx
+      - NVIDIA_REID_ONNX_PATH=model_weights/resnet50_market1501_aicity156.onnx
+      - USE_NVIDIA_REID=true
+      - USE_ONNX=true
+      # Detection thresholds
+      - YOLO_CONFIDENCE=0.4
+      # ReID thresholds
+      - REID_MATCH_THRESHOLD=0.40
+      - REID_NEW_THRESHOLD=0.50
+      # Quality thresholds
+      - GALLERY_QUALITY_THRESHOLD=55.0
     env_file:
-      - ./backend/.env
+      - ./.env.docker
     volumes:
       # Mount source code for hot-reloading
       - ./backend/app:/app/app:cached
+      - ./backend/preprocessor:/app/preprocessor:cached
       - ./backend/alembic:/app/alembic:cached
       - ./backend/alembic.ini:/app/alembic.ini:cached
       # Mount requirements.txt for dynamic package installation
       - ./backend/requirements.txt:/app/requirements.txt:cached
-      # Persist model weights
+      # Persist model weights (ONNX models)
       - ./backend/model_weights:/app/model_weights
       # Persist uploads
       - ./backend/uploads:/app/uploads

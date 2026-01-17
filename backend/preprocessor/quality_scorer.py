@@ -4,7 +4,7 @@ Quality Scorer for Person Crops.
 Assesses quality of person bounding box crops for ReID preprocessing.
 Uses three metrics:
 1. Sharpness (Laplacian variance)
-2. Pose/Orientation (MediaPipe-based front/side/back detection)
+2. Pose/Orientation (OpenCV-based front/side/back detection)
 3. Occlusion (aspect ratio + edge density)
 """
 
@@ -13,13 +13,6 @@ import numpy as np
 from typing import Dict, Optional, Tuple
 from dataclasses import dataclass
 
-# MediaPipe import with fallback
-try:
-    import mediapipe as mp
-    MEDIAPIPE_AVAILABLE = True
-except ImportError:
-    MEDIAPIPE_AVAILABLE = False
-    print("[QualityScorer] Warning: MediaPipe not installed. Pose estimation disabled.")
 
 
 @dataclass
@@ -277,7 +270,6 @@ class QualityScorer:
     def __init__(
         self,
         blur_threshold: float = 50.0,
-        min_pose_confidence: float = 0.5,
         min_acceptable_score: float = 30.0
     ):
         """
@@ -285,11 +277,10 @@ class QualityScorer:
         
         Args:
             blur_threshold: Laplacian variance threshold for blur detection
-            min_pose_confidence: MediaPipe confidence threshold
             min_acceptable_score: Minimum total score to accept a crop
         """
         self.sharpness_scorer = SharpnessScorer(blur_threshold)
-        self.pose_estimator = PoseEstimator(min_pose_confidence)
+        self.pose_estimator = PoseEstimator()
         self.occlusion_detector = OcclusionDetector()
         self.min_acceptable_score = min_acceptable_score
     
@@ -373,7 +364,7 @@ class QualityScorer:
     
     def close(self):
         """Release resources."""
-        self.pose_estimator.close()
+        pass
 
 
 def test_quality_scorer():

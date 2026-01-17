@@ -31,7 +31,27 @@ class Detection(BaseModel):
     camera_id: int
     timestamp: datetime
     bbox: BoundingBox
+    class_id: int = 0
+    class_name: str = "person"
     embedding: Optional[List[float]] = Field(None, description="Feature embedding vector")
+
+    @property
+    def x1(self) -> float: return self.bbox.x
+    @property
+    def y1(self) -> float: return self.bbox.y
+    @property
+    def x2(self) -> float: return self.bbox.x + self.bbox.width
+    @property
+    def y2(self) -> float: return self.bbox.y + self.bbox.height
+    @property
+    def confidence(self) -> float: return self.bbox.confidence
+
+    def to_xyah(self) -> List[float]:
+        """Convert to (center x, center y, aspect ratio, height)."""
+        center_x = self.bbox.x + self.bbox.width / 2
+        center_y = self.bbox.y + self.bbox.height / 2
+        aspect_ratio = self.bbox.width / max(1e-6, self.bbox.height)
+        return [center_x, center_y, aspect_ratio, self.bbox.height]
 
 
 class TrackletBase(BaseModel):

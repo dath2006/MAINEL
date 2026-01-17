@@ -15,7 +15,7 @@ from scipy.optimize import linear_sum_assignment
 from loguru import logger
 
 from app.core.tracking.kalman import KalmanFilter
-from app.core.detection.yolo_detector import Detection
+from app.schemas.track import Detection
 
 
 class TrackState(Enum):
@@ -421,7 +421,8 @@ class DeepSORTTracker:
         # Build IOU cost matrix
         cost_matrix = np.zeros((len(detection_indices), len(track_indices)))
         for i, det_idx in enumerate(detection_indices):
-            det_bbox = detections[det_idx].bbox  # x1, y1, x2, y2
+            det = detections[det_idx]
+            det_bbox = (det.x1, det.y1, det.x2, det.y2)  # Use property accessors
             for j, track_idx in enumerate(track_indices):
                 track_bbox = self.tracks[track_idx].to_tlbr()  # x1, y1, x2, y2
                 cost_matrix[i, j] = 1 - self._iou(det_bbox, track_bbox)

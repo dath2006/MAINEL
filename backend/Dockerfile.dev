@@ -1,59 +1,54 @@
 # ============================================
-# MCMT-ReID Backend - Development Dockerfile
+# MCMT-ReID Backend Development Dockerfile
 # ============================================
-# Optimized for hot-reload and dynamic package installation
+# CPU-only version for development without GPU
 
 FROM python:3.11-slim
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies (compatible with Debian Trixie)
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
-    build-essential \
-    libgl1 \
+    libgl1-mesa-glx \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
-    libxrender1 \
+    libxrender-dev \
     libgomp1 \
     curl \
-    git \
     && rm -rf /var/lib/apt/lists/*
 
-# Install pip and development tools
-RUN pip install --upgrade pip setuptools wheel
+# Upgrade pip
+RUN pip install --upgrade pip
 
 # Copy requirements and install Python dependencies
-# Uses PyTorch CUDA index for GPU support
 COPY requirements.txt .
-RUN pip install --no-cache-dir \
-    --extra-index-url https://download.pytorch.org/whl/cu121 \
-    -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Install TorchReID for OSNet (requires numpy, use no-build-isolation)
-RUN pip install numpy cython && \
-    pip install --no-build-isolation git+https://github.com/KaiyangZhou/deep-person-reid.git
+# Copy application code
+COPY app/ app/
+COPY preprocessor/ preprocessor/
+COPY alembic/ alembic/
+COPY alembic.ini .
 
-# Install watchfiles for better hot-reloading
-RUN pip install watchfiles
-
-# Copy entrypoint script
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-
-# Create necessary directories
-RUN mkdir -p model_weights uploads logs
-
-# Set environment variables
-ENV PYTHONPATH=/app
-ENV PYTHONUNBUFFERED=1
+# Create directories for model weights and uploads
+RUN mkdir -p model_weights uploads videos
 
 # Expose port
 EXPOSE 8000
 
-# Use entrypoint for flexible startup
-ENTRYPOINT ["/entrypoint.sh"]
+# Set environment variables
+ENV PYTHONPATH=/app
+ENV DEVICE=cpu
 
-# Default command - uvicorn with hot-reload
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/app"]
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=60s \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Run the application with hot-reload for development
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
