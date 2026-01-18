@@ -19,7 +19,15 @@ class Settings(BaseSettings):
     
     # API
     api_v1_prefix: str = "/api/v1"
-    cors_origins: list[str] = ["*"]
+    cors_origins: list[str] = Field(
+        default=[
+            "http://localhost:3000",
+            "http://localhost:8000",
+            "https://mainel.vercel.app",
+            "https://*.vercel.app",  # Allow all Vercel preview deployments
+        ],
+        description="Allowed CORS origins"
+    )
     
     # Database
     database_url: str = Field(
