@@ -22,12 +22,21 @@ interface UseTrackPathOptions {
     globalId?: string | null;
 }
 
+// Construct WebSocket URL from environment variable
+const getDefaultWsUrl = () => {
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    // Convert HTTP(S) to WS(S)
+    const wsProtocol = apiUrl.startsWith('https://') ? 'wss://' : 'ws://';
+    const baseUrl = apiUrl.replace(/^https?:\/\//, '');
+    return `${wsProtocol}${baseUrl}/api/v1/ws/tracks`;
+};
+
 /**
  * Hook for real-time track path updates via WebSocket.
  * 
  * Subscribes to track_path_update events and maintains path state.
  */
-export function useTrackPath({ wsUrl = 'ws://localhost:8000/api/v1/ws/tracks', globalId = null }: UseTrackPathOptions = {}) {
+export function useTrackPath({ wsUrl = getDefaultWsUrl(), globalId = null }: UseTrackPathOptions = {}) {
     const [pathPoints, setPathPoints] = useState<PathPoint[]>([]);
     const [cameraSequence, setCameraSequence] = useState<number[]>([]);
     const [allTracks, setAllTracks] = useState<Map<string, TrackPathUpdate>>(new Map());
