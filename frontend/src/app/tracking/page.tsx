@@ -7,10 +7,13 @@ import { StreamControls } from '@/components/tracking/stream-controls';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+// import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'; // Removed for custom layout control
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
-import { Plus, FolderOpen, Users, RefreshCw, Trash2 } from 'lucide-react';
-import { streamsApi, tracksApi, type StreamSource, type PlaybackStatus, type SearchResult } from '@/lib/api';
+import { Plus, FolderOpen, Users, RefreshCw, Trash2, Library } from 'lucide-react';
+import { streamsApi, tracksApi, type StreamSource, type PlaybackStatus, type SearchResult, type VideoMetadata } from '@/lib/api';
+import { VideoLibraryDialog } from '@/components/tracking/video-library-dialog';
+// import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
+import { LayoutGrid, RectangleHorizontal, Rows, ChevronDown, ChevronUp } from 'lucide-react';
 import dynamic from 'next/dynamic';
 
 const MultiTrackMap = dynamic(() => import('@/components/tracking/MultiTrackMap'), {
@@ -29,6 +32,14 @@ interface PersonEntry {
   last_seen: string;
   appearance_count: number;
   thumbnail: string | null;
+}
+
+interface CaptureEntry {
+  image_b64: string;
+  quality_score: number;
+  pose: string;
+  sharpness: number;
+  timestamp: string | null;
 }
 
 export default function TrackingPage() {
@@ -57,6 +68,37 @@ export default function TrackingPage() {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [selectedResult, setSelectedResult] = useState<SearchResult | null>(null);
   const [focusedSource, setFocusedSource] = useState<StreamSource | null>(null);
+  const [isLibraryDialogOpen, setIsLibraryDialogOpen] = useState(false);
+  const [selectedLibraryVideo, setSelectedLibraryVideo] = useState<VideoMetadata | null>(null);
+
+  const [layoutMode, setLayoutMode] = useState<'auto' | '1' | '2'>('auto');
+
+  // Custom Overlay Panel State
+  const [panelHeight, setPanelHeight] = useState(200);
+  const [isResizing, setIsResizing] = useState(false);
+  const [isPanelCollapsed, setIsPanelCollapsed] = useState(false);
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizing) return;
+      const newHeight = window.innerHeight - e.clientY;
+      // Clamp between 30px (header) and 80% screen
+      const clamped = Math.min(Math.max(newHeight, 30), window.innerHeight * 0.8);
+      setPanelHeight(clamped);
+      if (clamped > 40) setIsPanelCollapsed(false);
+    };
+    
+    const handleMouseUp = () => setIsResizing(false);
+
+    if (isResizing) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+    }
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizing]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -64,7 +106,7 @@ export default function TrackingPage() {
   const [persons, setPersons] = useState<PersonEntry[]>([]);
   const [galleryLoading, setGalleryLoading] = useState(false);
   const [galleryError, setGalleryError] = useState<string | null>(null);
-  const apiUrl = "http://localhost:8000/api/v1/streams";
+  const apiUrl = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000") + "/api/v1/streams";
 
   const fetchGallery = async () => {
     try {
@@ -79,6 +121,30 @@ export default function TrackingPage() {
     } finally {
       setGalleryLoading(false);
     }
+  };
+
+  // Popup State
+  const [selectedPerson, setSelectedPerson] = useState<string | null>(null);
+  const [captures, setCaptures] = useState<CaptureEntry[]>([]);
+  const [loadingCaptures, setLoadingCaptures] = useState(false);
+
+  const fetchCaptures = async (globalId: string) => {
+      try {
+          setLoadingCaptures(true);
+          const response = await fetch(`${apiUrl}/gallery/${globalId}/captures`);
+          if (!response.ok) throw new Error("Failed to fetch captures");
+          const data = await response.json();
+          setCaptures(data.captures || []);
+      } catch (err) {
+          console.error(err);
+      } finally {
+          setLoadingCaptures(false);
+      }
+  };
+
+  const handlePersonClick = (globalId: string) => {
+      setSelectedPerson(globalId);
+      fetchCaptures(globalId);
   };
 
   const clearGallery = async () => {
@@ -119,9 +185,18 @@ export default function TrackingPage() {
   // WebSocket state
   const [wsStatus, setWsStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const [frameCount, setFrameCount] = useState(0);
-
   useEffect(() => {
-    const ws = new WebSocket('ws://localhost:8000/api/v1/ws/tracks');
+    // Import getWsUrl dynamically or use logic? Using helper from api.ts
+    // Since getWsUrl uses the same env var logic, it's safer.
+    // However, getWsUrl is not imported yet. I should add import first or use direct logic.
+    // Let's use direct logic for now to match the style, or just string replace if I import it.
+    // Easier to just duplicate the logic briefly or do a multi-replace to add import.
+    // I will stick to replacement for now and assume I can add import later or just use inline logic.
+    
+    // Actually, let's use the helper. I need to add import to top of file first.
+    // But since I'm doing single replacement here, I'll just use the env var logic directly for WS.
+    const wsBase = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/^http/, 'ws');
+    const ws = new WebSocket(`${wsBase}/api/v1/ws/tracks`);
     ws.onopen = () => setWsStatus('connected');
     ws.onmessage = (event) => {
       try {
@@ -141,7 +216,17 @@ export default function TrackingPage() {
   const handleAddSource = async () => {
     setAddError(null);
     try {
-      if (newSource.source_type === 'video_file' && newSource.file) {
+      if (selectedLibraryVideo) {
+        // Create source from library video
+        await streamsApi.createSourceFromLibrary({
+          camera_id: newSource.camera_id,
+          video_id: selectedLibraryVideo.id,
+          name: newSource.name || selectedLibraryVideo.original_filename,
+          latitude: newSource.latitude,
+          longitude: newSource.longitude,
+        });
+        setSelectedLibraryVideo(null);
+      } else if (newSource.source_type === 'video_file' && newSource.file) {
         await streamsApi.uploadVideo({
           camera_id: newSource.camera_id,
           name: newSource.name,
@@ -164,6 +249,15 @@ export default function TrackingPage() {
     } catch (error) {
       setAddError(error instanceof Error ? error.message : 'Failed to add source');
     }
+  };
+
+  const handleLibraryVideoSelect = (video: VideoMetadata) => {
+    setSelectedLibraryVideo(video);
+    setNewSource(prev => ({
+      ...prev,
+      name: video.original_filename,
+      source_type: 'video_file',
+    }));
   };
 
   const handleDeleteSource = async (sourceId: number) => {
@@ -200,8 +294,10 @@ export default function TrackingPage() {
     <div className="flex flex-col h-[calc(100vh-theme(spacing.14))] bg-black font-mono overflow-hidden">
       <Header title="LIVE_TRACK" />
 
-      {/* Main Content Area (Video/Map) */}
-      <div className="flex-1 flex flex-col overflow-hidden border-t border-[#262626]">
+
+      <div className="flex-1 relative border-t border-[#262626] flex flex-col overflow-hidden">
+          {/* Main Content Area (Video/Map) - Takes full space behind overlay */}
+          <div className="absolute inset-0 flex flex-col overflow-hidden pb-8">
 
         {/* Top Toolbar / Diagnostics */}
         <div className="h-10 border-b border-[#262626] flex items-center justify-between bg-[#050505] px-2 text-[10px] tracking-widest text-[#666] shrink-0">
@@ -230,6 +326,35 @@ export default function TrackingPage() {
 
             <div className="w-px h-4 bg-[#262626]" />
 
+            <div className="flex items-center border border-[#333] rounded-none overflow-hidden">
+              <Button
+                size="icon"
+                className={`h-6 w-6 rounded-none ${layoutMode === 'auto' ? 'bg-white text-black' : 'bg-black text-[#888] hover:text-white'}`}
+                onClick={() => setLayoutMode('auto')}
+                title="Auto Grid"
+              >
+                <LayoutGrid className="w-3 h-3" />
+              </Button>
+              <Button
+                size="icon"
+                className={`h-6 w-6 rounded-none ${layoutMode === '2' ? 'bg-white text-black' : 'bg-black text-[#888] hover:text-white'}`}
+                onClick={() => setLayoutMode('2')}
+                title="2 per row"
+              >
+                <RectangleHorizontal className="w-3 h-3" />
+              </Button>
+              <Button
+                size="icon"
+                className={`h-6 w-6 rounded-none ${layoutMode === '1' ? 'bg-white text-black' : 'bg-black text-[#888] hover:text-white'}`}
+                onClick={() => setLayoutMode('1')}
+                title="1 per row"
+              >
+                <Rows className="w-3 h-3" />
+              </Button>
+            </div>
+
+            <div className="w-px h-4 bg-[#262626]" />
+
             <Button
               size="sm"
               className="h-6 text-[10px] rounded-none border border-[#333] bg-[#111] hover:bg-white hover:text-black uppercase px-4"
@@ -243,15 +368,27 @@ export default function TrackingPage() {
 
         {/* Viewport Content */}
         <div className="flex-1 overflow-hidden relative bg-[#000]">
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="h-full w-full flex flex-col">
+            
+            {/* Custom Tab Header - Absolute positioned on top left */}
             <div className="absolute top-4 left-4 z-[9999]">
-              <TabsList className="bg-black border border-[#262626] p-0 h-8 rounded-none shadow-xl">
-                <TabsTrigger value="feeds" className="h-8 rounded-none border-r border-[#262626] data-[state=active]:bg-white data-[state=active]:text-black text-[10px] uppercase tracking-wider w-24 transition-colors">Video</TabsTrigger>
-                <TabsTrigger value="map" className="h-8 rounded-none data-[state=active]:bg-white data-[state=active]:text-black text-[10px] uppercase tracking-wider w-24 transition-colors">Global_Map</TabsTrigger>
-              </TabsList>
+              <div className="flex bg-black border border-[#262626] h-8 shadow-xl">
+                <button 
+                  onClick={() => setActiveTab('feeds')}
+                  className={`h-full px-4 text-[10px] uppercase tracking-wider border-r border-[#262626] transition-colors ${activeTab === 'feeds' ? 'bg-white text-black' : 'text-[#888] hover:text-white'}`}
+                >
+                  Video
+                </button>
+                <button 
+                  onClick={() => setActiveTab('map')}
+                  className={`h-full px-4 text-[10px] uppercase tracking-wider transition-colors ${activeTab === 'map' ? 'bg-white text-black' : 'text-[#888] hover:text-white'}`}
+                >
+                  Global_Map
+                </button>
+              </div>
             </div>
 
-            <TabsContent value="feeds" className="h-full m-0 p-0 flex flex-col relative data-[state=active]:flex">
+            {/* VIDEO LAYER - Always mounted, hidden via visibility/z-index */}
+            <div className={`absolute inset-0 flex flex-col ${activeTab === 'feeds' ? 'z-10 opacity-100 pointer-events-auto' : 'z-0 opacity-0 pointer-events-none'}`}>
               <div className="absolute top-4 right-4 z-[9999] w-fit">
                 <StreamControls
                   onPlay={handlePlay}
@@ -262,25 +399,36 @@ export default function TrackingPage() {
                 />
               </div>
 
-              <div className="flex-1 p-4 grid gap-px bg-[#111] border-[#222] grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 overflow-y-auto content-start">
-                {sources.map((source) => (
-                  <VideoFeed
-                    key={source.id}
-                    cameraId={source.camera_id}
-                    sourceName={source.name}
-                    isActive={source.is_active && status.state === 'playing'}
-                    onDelete={() => handleDeleteSource(source.id)}
-                    onMaximize={() => setFocusedSource(source)}
-                  />
-                ))}
-                <div className="aspect-video min-h-[150px] border border-[#262626] bg-black flex flex-col items-center justify-center cursor-pointer hover:bg-[#111] transition-colors group" onClick={() => setIsAddDialogOpen(true)}>
-                  <Plus className="h-8 w-8 text-[#333] group-hover:text-white transition-colors" />
-                  <span className="mt-2 text-[10px] uppercase tracking-widest text-[#444] group-hover:text-white">Add_Source</span>
-                </div>
+              {/* Scrollable Video Grid Area covering everything */}
+              <div className="absolute inset-0 pt-0 pb-0 flex flex-col overflow-y-auto bg-black/40">
+                 {/* Spacer for top controls to avoid overlap if needed, or rely on padding */}
+                 <div className="min-h-[60px] w-full shrink-0" /> {/* Top padding for tabs/controls */}
+                 
+                 <div className={`p-4 grid gap-2 content-start ${
+                    layoutMode === '1' ? 'grid-cols-1' :
+                    layoutMode === '2' ? 'grid-cols-2' :
+                    'grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'
+                  }`}>
+                    {sources.map((source) => (
+                      <VideoFeed
+                        key={source.id}
+                        cameraId={source.camera_id}
+                        sourceName={source.name}
+                        isActive={source.is_active && (status.state === 'playing' || status.state === 'paused')}
+                        onDelete={() => handleDeleteSource(source.id)}
+                        onMaximize={() => setFocusedSource(source)}
+                      />
+                    ))}
+                    <div className="aspect-video min-h-[150px] border border-[#262626] bg-black flex flex-col items-center justify-center cursor-pointer hover:bg-[#111] transition-colors group" onClick={() => setIsAddDialogOpen(true)}>
+                      <Plus className="h-8 w-8 text-[#333] group-hover:text-white transition-colors" />
+                      <span className="mt-2 text-[10px] uppercase tracking-widest text-[#444] group-hover:text-white">Add_Source</span>
+                    </div>
+                  </div>
               </div>
-            </TabsContent>
+            </div>
 
-            <TabsContent value="map" className="h-full m-0 p-0 relative data-[state=active]:block">
+            {/* MAP LAYER - Always mounted, hidden via visibility/z-index */}
+            <div className={`absolute inset-0 ${activeTab === 'map' ? 'z-10 opacity-100 pointer-events-auto' : 'z-0 opacity-0 pointer-events-none'}`}>
               <MultiTrackMap
                 sources={sources}
                 activeTracks={selectedResult ? [{
@@ -294,29 +442,43 @@ export default function TrackingPage() {
                   setIsAddDialogOpen(true);
                 }}
               />
-              {searchResults.length > 0 && (
-                <div className="absolute top-4 right-4 z-[9999] w-80 max-h-[calc(100%-2rem)] flex flex-col">
-                  <SearchResultsPanel
-                    results={searchResults}
-                    selectedResult={selectedResult}
-                    onSelect={setSelectedResult}
-                    onClose={() => { setSearchResults([]); setSelectedResult(null); }}
-                  />
-                </div>
-              )}
-            </TabsContent>
-          </Tabs>
-        </div>
+            </div>
+            
+            {/* SEARCH OVERLAY - Global, appearing over everything */}
+            {searchResults.length > 0 && (
+                 <SearchResultsPanel
+                   results={searchResults}
+                   selectedResult={selectedResult}
+                   onSelect={setSelectedResult}
+                   onClose={() => { setSearchResults([]); setSelectedResult(null); }}
+                 />
+            )}
+            
+          </div>
       </div>
 
-      {/* Bottom: Person Gallery (Fixed Height, Horizontal Scroll) */}
-      <div className="h-48 shrink-0 border-t border-[#262626] bg-[#050505] flex flex-col">
-        <div className="flex items-center justify-between px-3 py-2 border-b border-[#1a1a1a]">
-          <span className="text-[10px] uppercase tracking-[0.2em] font-medium text-[#888] flex items-center gap-2">
-            <Users className="h-3 w-3" />
-            IDENTITY_LOG ({persons.length})
-          </span>
-          <div className="flex gap-1">
+      {/* Overlay Bottom Panel */}
+      <div 
+        style={{ height: isPanelCollapsed ? '32px' : `${panelHeight}px`, transition: isResizing ? 'none' : 'height 0.2s ease' }} 
+        className="absolute bottom-0 left-0 right-0 bg-black/95 z-50 border-t border-[#262626] flex flex-col shadow-[0_-5px_20px_rgba(0,0,0,0.5)]"
+      >
+        {/* Resize Handle / Header */}
+         <div 
+            className="h-1 bg-transparent hover:bg-red-500/50 cursor-ns-resize w-full absolute top-0 left-0 right-0 z-50 -translate-y-1/2"
+            onMouseDown={(e) => { e.preventDefault(); setIsResizing(true); }}
+         />
+         
+        <div className="flex items-center justify-between px-3 py-1 border-b border-[#1a1a1a] h-8 bg-[#050505] shrink-0 select-none cursor-ns-resize"
+             onMouseDown={(e) => { if(e.target === e.currentTarget) setIsResizing(true); }}
+        >
+          <div className="flex items-center gap-2 cursor-pointer" onClick={() => setIsPanelCollapsed(!isPanelCollapsed)}>
+             {isPanelCollapsed ? <ChevronUp className="w-3 h-3 text-[#666]" /> : <ChevronDown className="w-3 h-3 text-[#666]" />}
+             <span className="text-[10px] uppercase tracking-[0.2em] font-medium text-[#888]">
+               IDENTITY_LOG ({persons.length})
+             </span>
+          </div>
+
+          <div className="flex gap-1 z-10">
             <Button variant="ghost" size="icon" className="h-6 w-6 rounded-none text-[#666] hover:text-white" onClick={fetchGallery}>
               <RefreshCw className={`h-3 w-3 ${galleryLoading ? 'animate-spin' : ''}`} />
             </Button>
@@ -326,6 +488,8 @@ export default function TrackingPage() {
           </div>
         </div>
 
+      {/* Content */}
+      <div className="flex-1 bg-[#050505] flex flex-col overflow-hidden">
         <ScrollArea className="flex-1 w-full">
           <div className="flex gap-2 p-2 h-full">
             {galleryError && <div className="text-[10px] text-red-500 font-mono self-center px-4">{galleryError}</div>}
@@ -338,13 +502,14 @@ export default function TrackingPage() {
                 <div
                   key={person.global_id}
                   className="group relative bg-black border border-[#262626] cursor-pointer hover:border-white transition-colors shrink-0 w-28"
+                  onClick={() => handlePersonClick(person.global_id)}
                 >
-                  <div className="aspect-[3/4] overflow-hidden grayscale group-hover:grayscale-0 transition-all bg-[#111]">
+                  <div className="aspect-[3/4] overflow-hidden transition-all bg-[#111]">
                     {person.thumbnail ? (
                       <img
                         src={`data:image/jpeg;base64,${person.thumbnail}`}
                         alt={person.global_id}
-                        className="w-full h-full object-cover opacity-70 group-hover:opacity-100 transition-opacity"
+                        className="w-full h-full object-cover group-hover:opacity-100 transition-opacity"
                       />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center">
@@ -365,6 +530,8 @@ export default function TrackingPage() {
           <ScrollBar orientation="horizontal" />
         </ScrollArea>
       </div>
+      </div>
+    </div>
 
       {/* Add Source Dialog */}
       <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
@@ -373,22 +540,55 @@ export default function TrackingPage() {
             <DialogTitle className="text-xs uppercase tracking-[0.2em] font-mono">Input_Configuration</DialogTitle>
           </DialogHeader>
           <div className="p-4 space-y-4">
-            <Tabs defaultValue="file" className="w-full">
-              <TabsList className="w-full grid grid-cols-3 h-8 bg-[#111] rounded-none p-0">
-                <TabsTrigger value="file" className="text-[10px] uppercase rounded-none data-[state=active]:bg-white data-[state=active]:text-black" onClick={() => setNewSource(s => ({ ...s, source_type: 'video_file' }))}>File</TabsTrigger>
-                <TabsTrigger value="webcam" className="text-[10px] uppercase rounded-none data-[state=active]:bg-white data-[state=active]:text-black" onClick={() => setNewSource(s => ({ ...s, source_type: 'webcam' }))}>Cam</TabsTrigger>
-                <TabsTrigger value="rtsp" className="text-[10px] uppercase rounded-none data-[state=active]:bg-white data-[state=active]:text-black" onClick={() => setNewSource(s => ({ ...s, source_type: 'rtsp' }))}>RTSP</TabsTrigger>
-              </TabsList>
+            <div className="w-full">
+              <div className="w-full grid grid-cols-4 h-8 bg-[#111] border border-[#333]">
+                <button 
+                    className={`text-[10px] uppercase transition-colors ${newSource.source_type === 'video_file' ? 'bg-white text-black' : 'text-[#888] hover:text-white'}`}
+                    onClick={() => setNewSource(s => ({ ...s, source_type: 'video_file' }))}
+                >
+                    File
+                </button>
+                <button 
+                    className={`text-[10px] uppercase transition-colors ${newSource.source_type === 'webcam' ? 'bg-white text-black' : 'text-[#888] hover:text-white'}`}
+                    onClick={() => setNewSource(s => ({ ...s, source_type: 'webcam' }))}
+                >
+                    Cam
+                </button>
+                <button 
+                    className={`text-[10px] uppercase transition-colors ${newSource.source_type === 'rtsp' && !selectedLibraryVideo ? 'bg-white text-black' : 'text-[#888] hover:text-white'}`}
+                    onClick={() => { setNewSource(s => ({ ...s, source_type: 'rtsp' })); setSelectedLibraryVideo(null); }}
+                >
+                    RTSP
+                </button>
+                <button 
+                    className={`text-[10px] uppercase transition-colors ${selectedLibraryVideo ? 'bg-white text-black' : 'text-[#888] hover:text-white'}`}
+                    onClick={() => setIsLibraryDialogOpen(true)}
+                >
+                    Library
+                </button>
+              </div>
 
               <div className="mt-4 space-y-4">
-                {newSource.source_type === 'video_file' && (
+                {selectedLibraryVideo ? (
+                  <div className="p-3 bg-[#111] border border-[#333] space-y-1">
+                    <div className="text-xs font-mono text-white">{selectedLibraryVideo.original_filename}</div>
+                    <div className="text-[10px] text-[#666] font-mono">
+                      {selectedLibraryVideo.width}x{selectedLibraryVideo.height} • {Math.floor(selectedLibraryVideo.duration)}s • {(selectedLibraryVideo.file_size / (1024*1024)).toFixed(1)} MB
+                    </div>
+                    <button 
+                      className="text-[10px] text-red-500 hover:text-red-400 mt-2"
+                      onClick={() => setSelectedLibraryVideo(null)}
+                    >
+                      Clear Selection
+                    </button>
+                  </div>
+                ) : newSource.source_type === 'video_file' ? (
                   <Input type="file" className="rounded-none border-[#333] bg-[#050505] text-xs h-9" onChange={(e) => setNewSource({ ...newSource, source_path: '', file: e.target.files?.[0] || null })} />
-                )}
-                {newSource.source_type !== 'video_file' && (
+                ) : (
                   <Input
                     placeholder={newSource.source_type === 'webcam' ? "Device Index (0)" : "RTSP://..."}
                     className="rounded-none border-[#333] bg-[#050505] text-xs h-9"
-                    value={newSource.source_path}
+                    value={newSource.source_path || ''}
                     onChange={(e) => setNewSource({ ...newSource, source_path: e.target.value })}
                   />
                 )}
@@ -432,7 +632,7 @@ export default function TrackingPage() {
                   </div>
                 </div>
               </div>
-            </Tabs>
+            </div>
             {addError && <p className="text-red-500 text-[10px]">{addError}</p>}
             <Button onClick={handleAddSource} className="w-full bg-white text-black hover:bg-[#ccc] rounded-none uppercase tracking-widest text-xs h-9">
               Initialize_Source
@@ -440,6 +640,42 @@ export default function TrackingPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Identity Details Popup */}
+      <Dialog open={!!selectedPerson} onOpenChange={(open) => !open && setSelectedPerson(null)}>
+          <DialogContent className="border border-[#262626] bg-black p-0 max-w-4xl max-h-[80vh] overflow-hidden">
+              <DialogHeader className="p-4 border-b border-[#262626]">
+                  <DialogTitle className="text-xs uppercase tracking-[0.2em] font-mono">Archive :: {selectedPerson?.slice(0, 8)}</DialogTitle>
+              </DialogHeader>
+              <div className="p-4 overflow-y-auto max-h-[70vh] bg-[#050505]">
+                  {loadingCaptures ? (
+                      <div className="flex justify-center p-8"><RefreshCw className="h-6 w-6 animate-spin text-[#333]" /></div>
+                  ) : (
+                      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-2">
+                          {captures.map((cap, idx) => (
+                              <div key={idx} className="bg-black border border-[#262626]">
+                                  <div className="aspect-[3/4] relative">
+                                      <img src={`data:image/jpeg;base64,${cap.image_b64}`} className="w-full h-full object-contain opacity-80" alt={`Capture ${idx}`} />
+                                      <span className="absolute top-1 right-1 bg-black/80 text-white text-[9px] px-1 font-mono">Q:{cap.quality_score.toFixed(0)}</span>
+                                  </div>
+                                  <div className="p-1 border-t border-[#262626] text-center">
+                                      <span className="text-[9px] text-[#555] font-mono">{cap.pose}</span>
+                                  </div>
+                              </div>
+                          ))}
+                          {captures.length === 0 && <div className="col-span-full text-center text-[#444] text-xs py-8">No high-quality captures found.</div>}
+                      </div>
+                  )}
+              </div>
+          </DialogContent>
+      </Dialog>
+
+      {/* Video Library Dialog */}
+      <VideoLibraryDialog
+        open={isLibraryDialogOpen}
+        onClose={() => setIsLibraryDialogOpen(false)}
+        onSelectVideo={handleLibraryVideoSelect}
+      />
     </div>
   );
 }

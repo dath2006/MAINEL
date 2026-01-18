@@ -27,8 +27,12 @@ target_metadata = Base.metadata
 def get_url():
     """Get database URL from environment."""
     from app.config import settings
-    # Convert async URL to sync for Alembic
-    return settings.database_url.replace("+asyncpg", "")
+    # Keep async URL with asyncpg driver for async migrations
+    url = settings.database_url
+    # Ensure it has asyncpg driver
+    if "+asyncpg" not in url and "postgresql://" in url:
+        url = url.replace("postgresql://", "postgresql+asyncpg://")
+    return url
 
 
 def run_migrations_offline() -> None:

@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from typing import Optional, List
 from enum import Enum
+from datetime import datetime
 import os
 import shutil
 from loguru import logger
@@ -17,6 +18,7 @@ from app.services.stream_manager import (
     SourceType,
     PlaybackState,
 )
+from app.db.session import get_db_context
 
 
 router = APIRouter(prefix="/streams", tags=["streams"])
@@ -172,6 +174,83 @@ async def upload_video(
         latitude=source.latitude,
         longitude=source.longitude,
     )
+
+
+@router.post("/sources/from-library", response_model=SourceResponse)
+async def create_source_from_library(
+    camera_id: int = Form(...),
+    video_id: str = Form(...),
+    name: str = Form(""),
+    latitude: float = Form(0.0),
+    longitude: float = Form(0.0),
+):
+    """Create a source from an existing library video without re-uploading."""
+    from uuid import UUID
+    from app.db.models import VideoMetadata
+    from sqlalchemy import select
+    
+    try:
+        # Get video metadata from library
+        async with get_db_context() as db:
+            result = await db.execute(
+                select(VideoMetadata).where(VideoMetadata.id == UUID(video_id))
+            )
+            video = result.scalar_one_or_none()
+            
+            if not video:
+                raise HTTPException(status_code=404, detail="Video not found in library")
+            
+            # Check if file still exists (normalize path)
+            file_path = os.path.normpath(video.file_path)
+            if not os.path.exists(file_path):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Video file not found on filesystem: {file_path}"
+                )
+            
+            # Create source using the library video
+            manager = get_stream_manager()
+            source = await manager.add_source(
+                camera_id=camera_id,
+                source_path=file_path,
+                source_type=SourceType.VIDEO_FILE,
+                name=name or video.original_filename,
+                latitude=latitude,
+                longitude=longitude,
+            )
+            
+            if source is None:
+                raise HTTPException(status_code=400, detail="Failed to open video file")
+            
+            # Increment use count
+            video.use_count += 1
+            video.last_used = datetime.utcnow()
+            await db.commit()
+            
+            logger.info(f"Created source from library video: {video.filename}")
+            
+            return SourceResponse(
+                id=source.id,
+                camera_id=source.camera_id,
+                name=source.name,
+                source_type=source.source_type.value,
+                source_path=source.source_path,
+                fps=source.fps,
+                width=source.width,
+                height=source.height,
+                total_frames=source.total_frames,
+                current_frame=source.current_frame,
+                is_active=source.is_active,
+                latitude=source.latitude,
+                longitude=source.longitude,
+            )
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid video ID format")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create source from library: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create source: {str(e)}")
 
 
 @router.get("/sources", response_model=List[SourceResponse])

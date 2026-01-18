@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
+import { VideoUploadManager } from '@/components/tracking/video-upload-manager';
 
 export default function SettingsPage() {
   return (
@@ -12,6 +13,15 @@ export default function SettingsPage() {
       <Header title="SYSTEM_CONFIG" />
 
       <main className="flex-1 overflow-y-auto p-8 max-w-4xl mx-auto w-full space-y-8">
+
+        {/* Video Library Management */}
+        <section>
+          <div className="flex items-center gap-4 mb-4">
+            <h2 className="text-xs uppercase tracking-[0.2em] text-[#888]">Video_Library</h2>
+            <div className="h-px bg-[#262626] flex-1" />
+          </div>
+          <VideoUploadManager />
+        </section>
 
         {/* Network Configuration */}
         <section>
@@ -24,14 +34,14 @@ export default function SettingsPage() {
             <div className="group space-y-2">
               <label className="text-[10px] uppercase tracking-widest text-[#666] group-focus-within:text-white transition-colors">Backend Endpoint</label>
               <Input
-                defaultValue="http://localhost:8000"
+                defaultValue={process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}
                 className="rounded-none border-[#262626] bg-[#050505] text-xs h-10 px-4 focus-visible:ring-0 focus-visible:border-white transition-colors"
               />
             </div>
             <div className="group space-y-2">
               <label className="text-[10px] uppercase tracking-widest text-[#666] group-focus-within:text-white transition-colors">WebSocket Stream</label>
               <Input
-                defaultValue="ws://localhost:8000/api/v1/ws/tracks"
+                defaultValue={(process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/^http/, 'ws') + "/api/v1/ws/tracks"}
                 className="rounded-none border-[#262626] bg-[#050505] text-xs h-10 px-4 focus-visible:ring-0 focus-visible:border-white transition-colors"
               />
             </div>
@@ -90,3 +100,4 @@ export default function SettingsPage() {
     </div>
   );
 }
+

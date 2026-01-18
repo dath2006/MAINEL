@@ -81,9 +81,39 @@ export interface SystemHealth {
   memory_usage?: number;
 }
 
+export interface VideoMetadata {
+  id: string;
+  filename: string;
+  original_filename: string;
+  file_path: string;
+  file_size: number;
+  duration: number;
+  fps: number;
+  width: number;
+  height: number;
+  total_frames: number;
+  uploaded_at: string;
+  last_used?: string;
+  use_count: number;
+  description?: string;
+  tags: string[];
+}
+
 // --- API Client ---
 
-const API_BASE = 'http://localhost:8000/api/v1';
+const BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_BASE = `${BASE_URL}/api/v1`;
+
+// Helper for WebSocket URL
+export function getWsUrl(path: string): string {
+  if (path.startsWith('ws')) return path; // Already full URL
+  const protocol = BASE_URL.startsWith('https') ? 'wss' : 'ws';
+  const host = BASE_URL.replace(/^https?:\/\//, '');
+  // Remove trailing slashes from host to avoid double slash
+  const cleanHost = host.replace(/\/$/, '');
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  return `${protocol}://${cleanHost}${cleanPath}`;
+}
 
 async function fetchJson<T>(endpoint: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${endpoint}`, options);
@@ -151,6 +181,33 @@ export const streamsApi = {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ fps }),
   }),
+  
+  createSourceFromLibrary: async (data: {
+    camera_id: number;
+    video_id: string;
+    name?: string;
+    latitude?: number;
+    longitude?: number;
+  }) => {
+    const formData = new FormData();
+    formData.append('camera_id', String(data.camera_id));
+    formData.append('video_id', data.video_id);
+    if (data.name) formData.append('name', data.name);
+    if (data.latitude) formData.append('latitude', String(data.latitude));
+    if (data.longitude) formData.append('longitude', String(data.longitude));
+
+    const res = await fetch(`${API_BASE}/streams/sources/from-library`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: 'Failed to create source' }));
+      throw new Error(error.detail);
+    }
+
+    return res.json();
+  },
 };
 
 export const tracksApi = {
@@ -176,7 +233,8 @@ export const createTrackingSocket = (
   onConnect: () => void,
   onError: (error: Event) => void
 ) => {
-  const ws = new WebSocket('ws://localhost:8000/api/v1/ws/tracks');
+  const wsUrl = getWsUrl('/api/v1/ws/tracks');
+  const ws = new WebSocket(wsUrl);
 
   ws.onopen = () => {
     onConnect();
@@ -202,10 +260,37 @@ export const createTrackingSocket = (
   return ws;
 };
 
+export const videoLibraryApi = {
+  listVideos: () => fetchJson<VideoMetadata[]>('/video-library/videos'),
+  
+  uploadToLibrary: async (file: File, description?: string, tags?: string) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (description) formData.append('description', description);
+    if (tags) formData.append('tags', tags);
+
+    const res = await fetch(`${API_BASE}/video-library/upload`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: 'Upload failed' }));
+      throw new Error(error.detail);
+    }
+
+    return res.json();
+  },
+  
+  getVideoInfo: (videoId: string) => fetchJson<VideoMetadata>(`/video-library/videos/${videoId}`),
+  deleteVideo: (videoId: string) => fetchJson(`/video-library/videos/${videoId}`, { method: 'DELETE' }),
+};
+
 const api = {
   cameras: camerasApi,
   streams: streamsApi,
   tracks: tracksApi,
+  videoLibrary: videoLibraryApi,
   systemInfo: () => fetchJson<SystemHealth>('/health'),
 };
 

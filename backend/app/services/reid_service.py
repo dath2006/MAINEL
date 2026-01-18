@@ -557,16 +557,31 @@ class ReIDService:
         return entries
     
     def clear_gallery(self):
-        """Clear all identities from both VisualMatcher and GalleryStore."""
+        """Clear all identities from both VisualMatcher and GalleryStore with complete memory cleanup."""
+        # Explicitly delete embeddings from visual matcher gallery before clearing
+        for entry in self.visual_matcher.gallery.values():
+            if hasattr(entry, 'embedding') and entry.embedding is not None:
+                del entry.embedding
+            # Also clear multi-embedding arrays if they exist
+            if hasattr(entry, 'all_embeddings') and entry.all_embeddings:
+                for emb in entry.all_embeddings:
+                    del emb
+                entry.all_embeddings.clear()
+        
+        # Clear visual matcher gallery
         self.visual_matcher.clear_gallery()
         self._recent_tracklets.clear()
         
-        # Also clear GalleryStore (single source of truth for captures)
+        # Clear GalleryStore (single source of truth for captures) with proper memory cleanup
         from app.services.gallery_store import get_gallery_store
         gallery_store = get_gallery_store()
         gallery_store.clear()
         
-        logger.info("ReID gallery cleared (VisualMatcher + GalleryStore)")
+        # Additional garbage collection pass to ensure memory is freed
+        import gc
+        gc.collect()
+        
+        logger.info("ReID gallery cleared with complete memory cleanup (VisualMatcher + GalleryStore)")
 
 
 # Service singleton

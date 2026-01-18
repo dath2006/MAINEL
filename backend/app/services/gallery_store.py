@@ -314,9 +314,27 @@ class GalleryStore:
         return max_sim
     
     def clear(self):
-        """Clear all galleries."""
+        """Clear all galleries and force garbage collection to free RAM."""
+        # Explicitly delete numpy arrays and large data before clearing
+        for gallery in self._galleries.values():
+            for capture in gallery.captures:
+                # Delete numpy embedding arrays
+                if capture.embedding is not None:
+                    del capture.embedding
+                # Delete base64 image strings (can be large)
+                if hasattr(capture, 'image_b64') and capture.image_b64:
+                    del capture.image_b64
+            # Clear the captures list
+            gallery.captures.clear()
+        
+        # Clear the galleries dictionary
         self._galleries.clear()
-        logger.info("GalleryStore cleared")
+        
+        # Force Python garbage collection to free memory immediately
+        import gc
+        gc.collect()
+        
+        logger.info("GalleryStore cleared with garbage collection")
 
 
 # Singleton

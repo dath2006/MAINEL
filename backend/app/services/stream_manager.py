@@ -63,7 +63,7 @@ class VideoSource:
                     # CAP_DSHOW is often faster/safer on Windows for webcams
                     self._capture = cv2.VideoCapture(int(self.source_path), cv2.CAP_DSHOW)
                 else:
-                    self._capture = cv2.VideoCapture(self.source_path)
+                    self._capture = cv2.VideoCapture(self.source_path, cv2.CAP_FFMPEG)
                 
                 if self._capture.isOpened():
                     self.width = int(self._capture.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -77,7 +77,7 @@ class VideoSource:
             # Run open in a thread to allow timeout
             t = threading.Thread(target=_open_cam, daemon=True)
             t.start()
-            t.join(timeout=5.0)  # 5 second timeout
+            t.join(timeout=15.0)  # Increased timeout to 15s for large files
             
             if t.is_alive():
                 logger.error(f"Timeout opening source: {self.source_path}")
@@ -289,6 +289,7 @@ class StreamManager:
                 return False
             
             source = self._sources[source_id]
+            source_path = source.source_path  # Save before deletion
             
             # Stop the source thread
             source.close()
@@ -296,16 +297,54 @@ class StreamManager:
             
             logger.info(f"Removed source {source_id}")
             
-        # Deactivate in DB
+        # Delete from DB and decrement video library use_count if applicable
         try:
             async with get_db_context() as db:
+                from sqlalchemy import delete
+                from app.db.models import VideoMetadata
+                import os
+                
+                # Delete camera
                 result = await db.execute(select(Camera).where(Camera.id == source.camera_id))
                 cam = result.scalar_one_or_none()
                 if cam:
-                    cam.is_active = False
-                    await db.commit()
+                    await db.execute(delete(Camera).where(Camera.id == source.camera_id))
+                    logger.info(f"Deleted camera {source.camera_id} from database")
+                
+                # Check if this source was from the video library and decrement use_count
+                # Try multiple matching approaches for path compatibility
+                normalized_path = os.path.normpath(source_path).replace('\\', '/')
+                
+                # Get just the filename for fallback matching
+                filename = os.path.basename(source_path)
+                
+                # Try exact path match first
+                result = await db.execute(
+                    select(VideoMetadata).where(VideoMetadata.file_path == source_path)
+                )
+                video_meta = result.scalar_one_or_none()
+                
+                # Try normalized path
+                if not video_meta:
+                    result = await db.execute(
+                        select(VideoMetadata).where(VideoMetadata.file_path == normalized_path)
+                    )
+                    video_meta = result.scalar_one_or_none()
+                
+                # Try filename match as last resort
+                if not video_meta and filename:
+                    result = await db.execute(
+                        select(VideoMetadata).where(VideoMetadata.filename == filename)
+                    )
+                    video_meta = result.scalar_one_or_none()
+                
+                if video_meta and video_meta.use_count > 0:
+                    video_meta.use_count -= 1
+                    logger.info(f"Decremented use_count for video {video_meta.filename} to {video_meta.use_count}")
+                
+                await db.commit()
         except Exception as e:
-            logger.error(f"DB Removal Error: {e}")
+            logger.error(f"DB Deletion Error: {e}")
 
         return True
     
@@ -399,9 +438,10 @@ class StreamManager:
                 source._capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
             else:
                 logger.debug(f"Opening video file {source.source_path}")
-                # Try to use Hardware Acceleration if available
-                source._capture = cv2.VideoCapture(source.source_path, cv2.CAP_ANY)
-                source._capture.set(cv2.CAP_PROP_HW_ACCELERATION, cv2.VIDEO_ACCELERATION_ANY)
+                # Use FFMPEG backend for files for better compatibility/speed
+                source._capture = cv2.VideoCapture(source.source_path, cv2.CAP_FFMPEG)
+                # HW Acceleration can sometimes cause issues/hangs, disable for now if reliability is key
+                # source._capture.set(cv2.CAP_PROP_HW_ACCELERATION, cv2.VIDEO_ACCELERATION_ANY)
             
             if not source._capture.isOpened():
                 logger.error(f"Failed to open source {source.id}: {source.source_path}")
@@ -425,6 +465,7 @@ class StreamManager:
                 source.width = int(width)
                 source.height = int(height)
                 source.fps = fps
+                source.is_active = True # Re-activate source after successful open
                 
         except Exception as e:
             logger.error(f"Exception opening source {source.id}: {e}")
@@ -466,21 +507,40 @@ class StreamManager:
 
             if not ret:
                 consecutive_errors += 1
+                
+                # Auto-recovery: If we have some errors, try to re-open the stream
+                if consecutive_errors % 10 == 0:
+                    logger.warning(f"Source {source.id} unstable ({consecutive_errors} errors), attempting to re-open...")
+                    if source._capture:
+                        source._capture.release()
+                    
+                    try:
+                        if source.source_type == SourceType.WEBCAM:
+                            source._capture = cv2.VideoCapture(int(source.source_path), cv2.CAP_DSHOW)
+                            source._capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                            source._capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                        else:
+                            source._capture = cv2.VideoCapture(source.source_path, cv2.CAP_FFMPEG)
+                    except Exception as e:
+                        logger.error(f"Re-open failed: {e}")
+
                 if source.source_type == SourceType.VIDEO_FILE:
                     # Video file ended - Loop it
                     logger.debug(f"Video source {source.id} ended, checking loop...")
                     
                     # Verify we aren't in an infinite fail loop
-                    if consecutive_errors > 10 and source.total_frames < 2:
-                         logger.error(f"Source {source.id} seems broken (read failed repeatedly). Stopping.")
+                    if consecutive_errors > 20 and source.total_frames < 2:
+                         # Only kill if re-opens failed too
+                         logger.error(f"Source {source.id} seems broken. Stopping.")
                          break
                          
                     # Reset to beginning
-                    source._capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                    time.sleep(0.01) # output yield
+                    if source._capture and source._capture.isOpened():
+                         source._capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    time.sleep(0.01)
                     continue
                 else:
-                    # Camera disconnected or failed
+                    # Camera disconnection
                     logger.warning(f"Source {source.id} read failed (attempt {consecutive_errors})")
                     if consecutive_errors > MAX_ERRORS:
                         logger.error(f"Source {source.id} too many errors. Stopping.")

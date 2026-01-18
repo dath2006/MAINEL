@@ -28,6 +28,7 @@ import { useEffect, useState } from "react";
 
 const navigation = [
   { name: "Live Track", href: "/tracking", icon: Map },
+  { name: "Settings", href: "/settings", icon: Settings },
 ];
 
 export function AppSidebar() {

@@ -19,13 +19,15 @@ export function VideoFeed({
 }: VideoFeedProps) {
   const [imgSrc, setImgSrc] = useState<string | null>(null);
   const [fps, setFps] = useState(0);
+  const [hasSignal, setHasSignal] = useState(false);
   const lastFrameTime = useRef(performance.now());
+  const lastFrameReceivedAt = useRef<number>(0);
   const frameCount = useRef(0);
 
   useEffect(() => {
     const handleFrame = (e: CustomEvent) => {
       if (e.detail.camera_id === cameraId) {
-        setImgSrc(`data:image/jpeg;base64,${e.detail.frame}`);
+        setImgSrc(`data:image/jpeg;base64,${e.detail.frame_data}`);
 
         // FPS Calc
         frameCount.current++;
@@ -35,32 +37,61 @@ export function VideoFeed({
           frameCount.current = 0;
           lastFrameTime.current = now;
         }
+        // Signal Check
+        lastFrameReceivedAt.current = Date.now();
+        setHasSignal(true);
       }
     };
     window.addEventListener('video-frame', handleFrame as EventListener);
     return () => window.removeEventListener('video-frame', handleFrame as EventListener);
   }, [cameraId]);
 
+  // Signal Watchdog
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (isActive && Date.now() - lastFrameReceivedAt.current > 3000) {
+        setHasSignal(false);
+        setFps(0);
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [isActive]);
+
   return (
-    <div className="relative aspect-video bg-black border border-[#262626] group overflow-hidden">
-      {/* Feed Content */}
-      {isActive ? (
-        imgSrc ? (
-          <img src={imgSrc} className="w-full h-full object-contain" alt={sourceName} />
+    <div className="relative aspect-video bg-black border border-[#262626] group overflow-hidden w-full" style={{ aspectRatio: '16/9' }}>
+      <div className="relative w-full h-full">
+        {isActive ? (
+          hasSignal && imgSrc ? (
+            <img src={imgSrc} className="w-full h-full object-contain" alt={sourceName} />
+          ) : (
+             // Active but No Signal / Connecting
+             <div className="absolute inset-0 flex items-center justify-center bg-[#050505]">
+               <div className="flex flex-col items-center gap-3">
+                 <div className="relative">
+                    <div className="w-8 h-8 rounded-full border-2 border-[#333] border-t-white animate-spin" />
+                    <div className="absolute inset-0 flex items-center justify-center">
+                        <AlertTriangle className="w-3 h-3 text-[#333]" />
+                    </div>
+                 </div>
+                 <div className="flex flex-col items-center">
+                    <span className="text-xs font-mono text-white tracking-widest uppercase mb-1">
+                        {imgSrc ? 'NO SIGNAL' : 'CONNECTING'}
+                    </span>
+                    <span className="text-[9px] text-[#666] font-mono">
+                        {imgSrc ? 'SOURCE UNAVAILABLE' : 'WAITING FOR STREAM'}
+                    </span>
+                 </div>
+               </div>
+             </div>
+          )
         ) : (
-          <div className="absolute inset-0 flex items-center justify-center bg-[#050505]">
-            <div className="flex flex-col items-center gap-2 animate-pulse">
-              <span className="text-xs font-mono text-[#333] uppercase">Connecting...</span>
+          <div className="absolute inset-0 flex items-center justify-center bg-black bg-dot-pattern opacity-50">
+            <div className="flex flex-col items-center gap-2">
+              <span className="text-[10px] font-mono text-[#333] uppercase tracking-widest">Feed_Terminated</span>
             </div>
           </div>
-        )
-      ) : (
-        <div className="absolute inset-0 flex items-center justify-center bg-black bg-dot-pattern opacity-50">
-          <div className="flex flex-col items-center gap-2">
-            <span className="text-[10px] font-mono text-[#333] uppercase tracking-widest">Feed_Terminated</span>
-          </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Surveillance Overlay (Always visible) */}
       <div className="absolute inset-0 pointer-events-none">

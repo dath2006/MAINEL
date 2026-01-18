@@ -3,10 +3,17 @@
 # ============================================
 # For running the backend independently with GPU support
 # Uses: PeopleNet + DeepSORT + Nvidia ReID pipeline
+#
+# Usage:
+#   docker-compose up --build
+#
+# With env file:
+#   docker-compose --env-file .env up --build
 
 services:
   api:
     build: .
+    container_name: mcmt-backend
     ports:
       - "8000:8000"
     depends_on:
@@ -15,9 +22,9 @@ services:
       redis:
         condition: service_healthy
     environment:
-      - DATABASE_URL=postgresql+asyncpg://mcmt:mcmt_password@db:5432/mcmt_reid
+      - DATABASE_URL=postgresql+asyncpg://postgres:220066@db:5432/mcmt_reid
       - REDIS_URL=redis://redis:6379/0
-      - OSRM_URL=http://osrm:5000
+      - OSRM_URL=http://localhost:5000
       - DEVICE=cuda
       - DEBUG=false
       # ML Models
@@ -26,15 +33,24 @@ services:
       - USE_NVIDIA_REID=true
       - USE_ONNX=true
       # Detection thresholds
-      - YOLO_CONFIDENCE=0.4
+      - YOLO_CONFIDENCE=0.5
       # ReID thresholds  
       - REID_MATCH_THRESHOLD=0.40
       - REID_NEW_THRESHOLD=0.50
+      - REID_MERGE_THRESHOLD=0.6
       # Quality thresholds
       - GALLERY_QUALITY_THRESHOLD=55.0
+      - SEARCH_THRESHOLD=0.5
+      # Tracking
+      - DEEPSORT_MAX_AGE=10
+      - DEEPSORT_N_INIT=1
+      # Spatial-Temporal
+      - ST_WEIGHT=0.5
+      - MAX_TRANSITION_TIME=300.0
     volumes:
       - ./model_weights:/app/model_weights
       - ./uploads:/app/uploads
+      - ./video_library:/app/video_library
       - ./logs:/app/logs
     deploy:
       resources:
@@ -46,17 +62,18 @@ services:
     restart: unless-stopped
 
   db:
-    image: postgis/postgis:15-3.3
+    image: postgres:15-alpine
+    container_name: mcmt-db
     environment:
       - POSTGRES_DB=mcmt_reid
-      - POSTGRES_USER=mcmt
-      - POSTGRES_PASSWORD=mcmt_password
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=220066
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mcmt -d mcmt_reid"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d mcmt_reid"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -64,6 +81,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    container_name: mcmt-redis
     ports:
       - "6379:6379"
     volumes:
@@ -75,16 +93,6 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
-
-  # OSRM routing service (requires OSM map data)
-  # Uncomment and configure with your map data
-  # osrm:
-  #   image: osrm/osrm-backend
-  #   ports:
-  #     - "5000:5000"
-  #   volumes:
-  #     - ./osrm-data:/data
-  #   command: osrm-routed --algorithm mld /data/map.osrm
 
 volumes:
   postgres_data:

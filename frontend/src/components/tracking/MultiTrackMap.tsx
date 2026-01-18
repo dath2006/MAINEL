@@ -336,7 +336,22 @@ export default function MultiTrackMap({
                 </div>
             )}
 
-            <MapContainer center={center} zoom={zoom} scrollWheelZoom={true} className="h-full w-full rounded-lg" style={{ minHeight: '400px' }}>
+            <style jsx global>{`
+                .leaflet-container {
+                    cursor: crosshair !important;
+                }
+                .leaflet-interactive {
+                    cursor: crosshair !important;
+                }
+                .leaflet-grab {
+                    cursor: crosshair !important;
+                }
+                .leaflet-dragging .leaflet-grab {
+                    cursor: grabbing !important;
+                }
+            `}</style>
+
+            <MapContainer center={center} zoom={zoom} scrollWheelZoom={true} className="h-full w-full rounded-lg cursor-crosshair" style={{ minHeight: '400px' }}>
                 <MapEvents onMapClick={onMapClick} />
                 <MapBoundsController sources={sources} activeTracks={mergedTracks} />
                 <TileLayer

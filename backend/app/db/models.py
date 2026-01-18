@@ -1,8 +1,7 @@
 """
 Database Models
 
-SQLAlchemy models for cameras, tracklets, and global tracks
-with PostGIS geospatial support.
+SQLAlchemy models for cameras, tracklets, and global tracks.
 """
 
 from datetime import datetime
@@ -277,3 +276,48 @@ class CameraTransition(Base):
     
     def __repr__(self) -> str:
         return f"<CameraTransition({self.from_camera_id} -> {self.to_camera_id})>"
+
+
+class VideoMetadata(Base):
+    """
+    Video library metadata.
+    
+    Stores information about uploaded videos that can be reused
+    as sources without re-uploading.
+    """
+    __tablename__ = "video_metadata"
+    
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    
+    # File information
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_path: Mapped[str] = mapped_column(String(500), nullable=False, unique=True)
+    file_size: Mapped[int] = mapped_column(Integer, default=0)  # bytes
+    
+    # Video properties
+    duration: Mapped[float] = mapped_column(Float, default=0.0)  # seconds
+    fps: Mapped[float] = mapped_column(Float, default=0.0)
+    width: Mapped[int] = mapped_column(Integer, default=0)
+    height: Mapped[int] = mapped_column(Integer, default=0)
+    total_frames: Mapped[int] = mapped_column(Integer, default=0)
+    
+    # Usage tracking
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_used: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    use_count: Mapped[int] = mapped_column(Integer, default=0)  # How many sources use this video
+    
+    # Optional description/tags
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    tags: Mapped[Optional[List[str]]] = mapped_column(ARRAY(String), default=[])
+    
+    # Indexes
+    __table_args__ = (
+        Index('ix_video_metadata_uploaded', 'uploaded_at'),
+        Index('ix_video_metadata_filename', 'filename'),
+    )
+    
+    def __repr__(self) -> str:
+        return f"<VideoMetadata(id={self.id}, filename='{self.filename}')>"

@@ -10,7 +10,7 @@ import { StatsCards } from '@/components/dashboard/stats-cards';
 import { CameraGrid } from '@/components/dashboard/camera-grid';
 import { ActivityFeed } from '@/components/dashboard/activity-feed';
 import { Separator } from '@/components/ui/separator';
-
+import { useRouter } from 'next/navigation';
 export default function Dashboard() {
   const {
     systemHealth,
@@ -22,6 +22,12 @@ export default function Dashboard() {
     recentEvents,
     addEvent
   } = useAppStore();
+
+  const router = useRouter();
+
+  useEffect(() => {
+    router.push('/tracking');
+  }, [router]);
 
   // Initial Data Fetch
   useEffect(() => {

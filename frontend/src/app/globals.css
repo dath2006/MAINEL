@@ -1,6 +1,5 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "@fontsource/geist-mono";
 
 @plugin "tailwindcss-animate";
 
@@ -63,28 +62,28 @@
 
   /* Pure Matte Black Identity */
   --background: #000000;
-  --foreground: #ffffff;
-  /* Pure white for high contrast */
+  --foreground: #ff4d4d;
+  /* Blood Red for high contrast */
 
   --card: #080808;
   /* Very dark grey, almost black */
-  --card-foreground: #ffffff;
+  --card-foreground: #ff4d4d;
 
   --popover: #0a0a0a;
-  --popover-foreground: #ffffff;
+  --popover-foreground: #ff4d4d;
 
   --primary: #ffffff;
   --primary-foreground: #000000;
 
   --secondary: #121212;
-  --secondary-foreground: #cccccc;
+  --secondary-foreground: #cc0000;
 
   --muted: #1a1a1a;
-  --muted-foreground: #666666;
-  /* Diagnostic grey */
+  --muted-foreground: #8a0303;
+  /* Dark Blood Red */
 
   --accent: #1a1a1a;
-  --accent-foreground: #ffffff;
+  --accent-foreground: #ff4d4d;
 
   --destructive: #7f1d1d;
   /* Muted Red - Warning/Alert only */
@@ -95,19 +94,19 @@
   --input: #1a1a1a;
   --ring: #333333;
 
-  --chart-1: #ffffff;
-  --chart-2: #888888;
-  --chart-3: #444444;
-  --chart-4: #222222;
-  --chart-5: #111111;
+  --chart-1: #ff0000;
+  --chart-2: #cc0000;
+  --chart-3: #990000;
+  --chart-4: #660000;
+  --chart-5: #330000;
 
   --sidebar: #010101;
   /* Explicitly distinct from background slightly */
-  --sidebar-foreground: #bbbbbb;
-  --sidebar-primary: #ffffff;
+  --sidebar-foreground: #ff4d4d;
+  --sidebar-primary: #ff4d4d;
   --sidebar-primary-foreground: #000000;
   --sidebar-accent: #111111;
-  --sidebar-accent-foreground: #ffffff;
+  --sidebar-accent-foreground: #ff4d4d;
   --sidebar-border: #262626;
   --sidebar-ring: #333333;
 }

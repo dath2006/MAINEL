@@ -274,10 +274,33 @@ class VisualMatcher:
             del self.face_gallery[global_id]
     
     def clear_gallery(self):
-        """Clear all gallery entries."""
+        """Clear all gallery entries with proper memory cleanup."""
+        # Explicitly delete numpy arrays before clearing dictionaries
+        for entry in self.gallery.values():
+            # Delete main embedding
+            if hasattr(entry, 'embedding') and entry.embedding is not None:
+                del entry.embedding
+            # Delete embedding history list
+            if hasattr(entry, 'embeddings_history') and entry.embeddings_history:
+                for emb in entry.embeddings_history:
+                    if emb is not None:
+                        del emb
+                entry.embeddings_history.clear()
+        
+        # Delete face embeddings
+        for face_emb in self.face_gallery.values():
+            if face_emb is not None:
+                del face_emb
+        
+        # Clear the dictionaries
         self.gallery.clear()
         self.face_gallery.clear()
-        logger.info("Gallery cleared")
+        
+        # Force garbage collection
+        import gc
+        gc.collect()
+        
+        logger.info("Gallery cleared with memory cleanup")
     
     def add_face_embedding(self, global_id: str, face_embedding: np.ndarray):
         """
