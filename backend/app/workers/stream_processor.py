@@ -10,11 +10,49 @@ import base64
 import json
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 import cv2
 import numpy as np
 from loguru import logger
+
+# Try simplejpeg first (fastest CPU encoder), then TurboJPEG, then OpenCV
+SIMPLEJPEG_AVAILABLE = False
+try:
+    import simplejpeg
+    SIMPLEJPEG_AVAILABLE = True
+    logger.info("simplejpeg available - using fast JPEG encoding")
+except ImportError:
+    logger.info("simplejpeg not available")
+
+# TurboJPEG fallback
+TURBOJPEG = None
+TURBOJPEG_AVAILABLE = False
+if not SIMPLEJPEG_AVAILABLE:
+    try:
+        from turbojpeg import TurboJPEG
+        lib_paths = [
+            r"C:\libjpeg-turbo64\bin\turbojpeg.dll",
+            r"C:\Program Files\libjpeg-turbo64\bin\turbojpeg.dll",
+        ]
+        for path in lib_paths:
+            try:
+                import os
+                if os.path.exists(path):
+                    TURBOJPEG = TurboJPEG(path)
+                    break
+            except:
+                continue
+        if TURBOJPEG is None:
+            TURBOJPEG = TurboJPEG()
+        TURBOJPEG_AVAILABLE = True
+        logger.info("TurboJPEG available - using fast JPEG encoding")
+    except Exception as e:
+        logger.info(f"TurboJPEG not available, using OpenCV encoding")
+
+# Thread pool for parallel JPEG encoding
+ENCODE_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="jpeg_encode")
 
 from app.services.stream_manager import get_stream_manager, FrameData, PlaybackState
 from app.services.tracking_service import get_tracking_service
@@ -25,6 +63,14 @@ from app.api.v1.realtime import broadcast_event
 from app.schemas.track import TrackStatus
 from app.services.gallery_store import get_gallery_store
 from app.config import settings
+
+# Batch processing support
+try:
+    from app.workers.batch_processor import BatchFrameAccumulator
+    BATCH_PROCESSING_AVAILABLE = True
+except ImportError:
+    logger.warning("batch_processor not available, using sequential processing")
+    BATCH_PROCESSING_AVAILABLE = False
 
 # Function to get scorer (lazy load to avoid heavy imports at root if needed)
 _quality_scorer = None
@@ -58,11 +104,15 @@ class StreamProcessor:
         self,
         detection_interval: int = 1,  # Process every N frames
         broadcast_frames: bool = True,  # Send frames to frontend
-        frame_quality: int = 50,  # JPEG quality for frames
+        frame_quality: int = 50,  # JPEG quality (balanced for ReID)
+        target_display_fps: int = 30,  # Target FPS for display
     ):
         self.detection_interval = detection_interval
         self.broadcast_frames = broadcast_frames
         self.frame_quality = frame_quality
+        self.target_display_fps = target_display_fps
+        self._min_frame_interval = 1.0 / target_display_fps  # Seconds between frames
+        self._last_broadcast_time: Dict[int, float] = {}  # Per-camera throttle
         
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -70,6 +120,18 @@ class StreamProcessor:
         self._fps = 0.0
         self._last_fps_time = time.time()
         self._fps_frame_count = 0
+        
+        # Batch processing (TensorRT optimization)
+        self.use_batch_processing = BATCH_PROCESSING_AVAILABLE and settings.tensorrt_batch_size > 1
+        if self.use_batch_processing:
+            self.batch_accumulator = BatchFrameAccumulator(
+                batch_size=settings.tensorrt_batch_size,
+                timeout=0.05  # 50ms max wait
+            )
+            logger.info(f"Batch processing enabled (batch_size={settings.tensorrt_batch_size})")
+        else:
+            self.batch_accumulator = None
+            logger.info("Sequential processing (batch disabled)")
         
         # Sticky state for frame skipping
         self._last_detections = []
@@ -107,7 +169,7 @@ class StreamProcessor:
         logger.info("StreamProcessor stopped")
     
     def _run_loop(self):
-        """Main processing loop."""
+        """Main processing loop with batch support."""
         stream_manager = get_stream_manager()
         
         # Try to get ML services, but don't fail if unavailable
@@ -119,6 +181,142 @@ class StreamProcessor:
             logger.info("ML services loaded successfully")
         except Exception as e:
             logger.warning(f"ML services not available (frames will still stream): {e}")
+        
+        # Debug: Log batch processing status
+        logger.info(f"🔍 Batch processing check:")
+        logger.info(f"  - use_batch_processing: {self.use_batch_processing}")
+        logger.info(f"  - batch_accumulator: {self.batch_accumulator is not None}")
+        logger.info(f"  - tracking_service: {tracking_service is not None}")
+        
+        # Batch processing mode
+        if self.use_batch_processing and self.batch_accumulator is not None:
+            logger.info("🚀 USING BATCH PROCESSING MODE")
+            self._run_loop_batched(stream_manager, tracking_service, reid_service)
+        else:
+            logger.info("⚠️ USING SEQUENTIAL PROCESSING MODE")
+            self._run_loop_sequential(stream_manager, tracking_service, reid_service)
+    
+    def _run_loop_batched(self, stream_manager, tracking_service, reid_service):
+        """Batch processing loop (TensorRT optimized)."""
+        logger.info("Starting BATCH processing mode")
+        
+        # Create a single event loop for the entire batch session
+        batch_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(batch_loop)
+        
+        # Get detector once
+        detector = tracking_service._get_detector() if tracking_service else None
+        if not detector:
+            logger.error("No detector available! Falling back to sequential mode")
+            self._run_loop_sequential(stream_manager, tracking_service, reid_service)
+            return
+        
+        if not hasattr(detector, 'preprocess'):
+            logger.error("Detector missing preprocess method! Falling back to sequential mode")
+            self._run_loop_sequential(stream_manager, tracking_service, reid_service)
+            return
+        
+        logger.info(f"✅ Batch mode initialized with detector: {type(detector).__name__}")
+        
+        while self._running:
+            # Check if playing
+            if stream_manager.state != PlaybackState.PLAYING:
+                time.sleep(0.1)
+                continue
+            
+            # Accumulate frames for batch processing
+            while not self.batch_accumulator.should_process() and self._running:
+                frame_data = stream_manager.get_next_frame(timeout=0.05)
+                if frame_data is None:
+                    break
+                
+                self._frame_count += 1
+                
+                # Preprocess frame for batch
+                preprocessed, _, _ = detector.preprocess(frame_data.frame)
+                self.batch_accumulator.add_frame(frame_data, preprocessed)
+                
+                # Log every 10 frames
+                if self._frame_count % 10 == 0:
+                    logger.debug(f"Accumulated {len(self.batch_accumulator)} frames (target: {settings.tensorrt_batch_size})")
+            
+            # Process accumulated batch
+            if len(self.batch_accumulator) > 0:
+                self._process_batch(
+                    self.batch_accumulator,
+                    tracking_service,
+                    reid_service,
+                    stream_manager,
+                    batch_loop
+                )
+    
+    def _process_batch(self, accumulator, tracking_service, reid_service, stream_manager, loop):
+        """Process accumulated batch of frames."""
+        batch_items = accumulator.clear()
+        batch_size = len(batch_items)
+        
+        if batch_size == 0:
+            return
+        
+        try:
+            # Prepare batch data
+            frames_data = [(item.frame_data.camera_id, item.frame_data.frame, item.frame_data.timestamp) 
+                          for item in batch_items]
+            
+            # Batch detection + tracking (FAST!)
+            start_time = time.time()
+            
+            batch_results = loop.run_until_complete(
+                tracking_service.process_frames_batch(frames_data, extract_features=True)
+            )
+            
+            batch_time = (time.time() - start_time) * 1000  # ms
+            per_frame_time = batch_time / batch_size
+            batch_fps = 1000 / per_frame_time
+            
+            logger.info(
+                f"🚀 Batch inference: {batch_size} frames in {batch_time:.2f}ms "
+                f"({batch_fps:.1f} FPS, {per_frame_time:.2f}ms per frame)"
+            )
+            
+            # Update FPS counter
+            self._fps_frame_count += batch_size
+            now = time.time()
+            if now - self._last_fps_time >= 1.0:
+                self._fps = self._fps_frame_count / (now - self._last_fps_time)
+                self._fps_frame_count = 0
+                self._last_fps_time = now
+            
+            # Collect last frame per camera for ReID (heavy processing only on last)
+            last_frame_per_camera = {}
+            for item in batch_items:
+                camera_id = item.frame_data.camera_id
+                if camera_id in batch_results:
+                    tracks, features = batch_results[camera_id]
+                    last_frame_per_camera[camera_id] = (item.frame_data, tracks, features)
+            
+            # Run ReID only on LAST frame per camera (expensive operation)
+            for camera_id, (frame_data, tracks, features) in last_frame_per_camera.items():
+                self._process_reid_and_broadcast(
+                    frame_data,
+                    tracks,
+                    features,
+                    reid_service,
+                    loop
+                )
+            
+            # Broadcast ALL frames in batch using PARALLEL encoding
+            if self.broadcast_frames:
+                self._broadcast_batch_parallel(batch_items, batch_results)
+        
+        except Exception as e:
+            logger.error(f"Batch processing error: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+    
+    def _run_loop_sequential(self, stream_manager, tracking_service, reid_service):
+        """Sequential processing loop (fallback)."""
+        logger.info("Starting SEQUENTIAL processing mode")
         
         while self._running:
             # Check if playing
@@ -229,6 +427,92 @@ class StreamProcessor:
                 except Exception as e:
                     logger.error(f"Error broadcasting frame for source {frame_data.source_id}: {e}")
                     continue
+    
+    def _process_reid_and_broadcast(self, frame_data, tracks, features, reid_service, loop=None):
+        """Process ReID matching and broadcast results (helper for batch mode)."""
+        if loop is None:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
+        try:
+            quality_scorer = get_quality_scorer_instance()
+            
+            for track in tracks:
+                if not track.is_confirmed():
+                    continue
+                
+                conf = float(track.confidence) if hasattr(track, 'confidence') else 0.0
+                if conf < 0.5:
+                    continue
+                
+                if not track.features:
+                    continue
+                
+                feature = track.features[-1]
+                
+                # Quality check
+                should_update = False
+                quality_score = 0.0
+                thumb_b64 = None
+                
+                bbox = track.to_tlbr()
+                x1, y1, x2, y2 = map(int, bbox)
+                h, w = frame_data.frame.shape[:2]
+                x1, y1 = max(0, x1), max(0, y1)
+                x2, y2 = min(w, x2), min(h, y2)
+                
+                if x2 > x1 and y2 > y1 and quality_scorer:
+                    crop = frame_data.frame[y1:y2, x1:x2]
+                    q_result = quality_scorer.score(crop)
+                    quality_score = q_result.total_score
+                    
+                    if quality_score > settings.gallery_quality_threshold:
+                        should_update = True
+                        thumb = cv2.resize(crop, (64, 128))
+                        _, buffer = cv2.imencode('.jpg', thumb, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                        thumb_b64 = base64.b64encode(buffer).decode('utf-8')
+                
+                # ReID matching
+                current_global_id = getattr(track, 'global_id', None)
+                
+                if should_update or current_global_id is None:
+                    if reid_service:
+                        match = loop.run_until_complete(
+                            reid_service.match_identity(
+                                camera_id=frame_data.camera_id,
+                                embedding=feature,
+                                timestamp=frame_data.timestamp,
+                            )
+                        )
+                        track.global_id = str(match.global_track_id)
+                        
+                        if should_update and thumb_b64:
+                            gallery_store = get_gallery_store()
+                            gallery_store.add_capture(
+                                global_id=track.global_id,
+                                image_b64=thumb_b64,
+                                quality_score=quality_score,
+                                pose=q_result.pose if hasattr(q_result, 'pose') else 'unknown',
+                                sharpness=q_result.sharpness_score if hasattr(q_result, 'sharpness_score') else 0.0,
+                                frame_number=frame_data.frame_number,
+                                timestamp=frame_data.timestamp,
+                                embedding=feature
+                            )
+                
+                # Update track store
+                if getattr(track, 'global_id', None):
+                    try:
+                        track_store = get_track_store()
+                        track_store.add_or_update_track(
+                            track.global_id,
+                            {"status": TrackStatus.ACTIVE}
+                        )
+                        track_store.update_camera_sequence(track.global_id, frame_data.camera_id)
+                    except Exception as e:
+                        logger.error(f"Failed to update TrackStore: {e}")
+        
+        except Exception as e:
+            logger.error(f"ReID processing error: {e}")
     
     def _process_frame(
         self,
@@ -418,6 +702,112 @@ class StreamProcessor:
         
         return results
     
+    def _encode_frame_fast(self, frame: np.ndarray, quality: int = 50) -> bytes:
+        """Fast JPEG encoding with simplejpeg > TurboJPEG > OpenCV fallback."""
+        # Reduce resolution first (biggest speed gain)
+        h, w = frame.shape[:2]
+        max_width = 960  # Good balance for ReID quality
+        if w > max_width:
+            scale = max_width / w
+            new_w, new_h = int(w * scale), int(h * scale)
+            frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+        
+        if SIMPLEJPEG_AVAILABLE:
+            # simplejpeg is ~3-5x faster than OpenCV, expects BGR
+            return simplejpeg.encode_jpeg(frame, quality=quality, colorspace='BGR')
+        
+        if TURBOJPEG_AVAILABLE and TURBOJPEG:
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            return TURBOJPEG.encode(frame_rgb, quality=quality)
+        
+        # OpenCV fallback (slowest)
+        encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), quality]
+        _, buffer = cv2.imencode('.jpg', frame, encode_params)
+        return buffer.tobytes()
+    
+    def _prepare_frame_for_broadcast(self, frame: np.ndarray, tracks: List[dict]) -> np.ndarray:
+        """Draw overlays on frame (lightweight but informative)."""
+        for track in tracks:
+            bbox = track["bbox"]
+            x1, y1, x2, y2 = map(int, bbox)
+            track_id = track["track_id"]
+            global_id = track.get("global_id", "")
+            conf = track.get("confidence", 0.0)
+            
+            # Color based on confidence (proxy for quality)
+            if conf >= 0.7:
+                color = (0, 255, 0)      # Green - High confidence
+            elif conf >= 0.5:
+                color = (0, 255, 255)    # Yellow - Medium
+            else:
+                color = (0, 0, 255)      # Red - Low
+            
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            
+            # Simple label with ID
+            label = f"{global_id[:8] if global_id else track_id}"
+            cv2.putText(frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+        
+        return frame
+    
+    def _broadcast_batch_parallel(self, batch_items, batch_results):
+        """Broadcast all frames in batch using parallel JPEG encoding."""
+        from concurrent.futures import as_completed
+        
+        # Prepare all frames with overlays first
+        frames_to_encode = []
+        for item in batch_items:
+            camera_id = item.frame_data.camera_id
+            if camera_id not in batch_results:
+                continue
+            
+            tracks, features = batch_results[camera_id]
+            track_list = [
+                {
+                    "track_id": track.track_id,
+                    "bbox": track.to_tlbr().tolist(),
+                    "confidence": float(track.confidence) if hasattr(track, 'confidence') else 0.0,
+                    "global_id": getattr(track, 'global_id', None),
+                }
+                for track in tracks if track.is_confirmed()
+            ]
+            
+            # Draw overlays
+            frame = item.frame_data.frame.copy()
+            frame = self._prepare_frame_for_broadcast(frame, track_list)
+            
+            frames_to_encode.append((item.frame_data, frame, track_list))
+        
+        # Encode all frames in parallel using thread pool
+        futures = {}
+        for frame_data, frame, track_list in frames_to_encode:
+            future = ENCODE_EXECUTOR.submit(self._encode_frame_fast, frame, self.frame_quality)
+            futures[future] = (frame_data, track_list)
+        
+        # Collect results and broadcast as they complete
+        for future in as_completed(futures):
+            frame_data, track_list = futures[future]
+            try:
+                buffer = future.result()
+                frame_b64 = base64.b64encode(buffer).decode('utf-8')
+                
+                event = {
+                    "type": "frame",
+                    "camera_id": frame_data.camera_id,
+                    "source_id": frame_data.source_id,
+                    "frame_number": frame_data.frame_number,
+                    "timestamp": frame_data.timestamp.isoformat(),
+                    "frame_data": frame_b64,
+                    "track_count": len(track_list),
+                    "tracks": track_list,
+                    "fps": round(self._fps, 1),
+                }
+                
+                if self._main_loop and self._main_loop.is_running():
+                    asyncio.run_coroutine_threadsafe(broadcast_event(event), self._main_loop)
+            except Exception as e:
+                logger.error(f"Encoding error: {e}")
+    
     def _broadcast_frame(
         self,
         frame_data: FrameData,
@@ -470,11 +860,8 @@ class StreamProcessor:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2
                 )
             
-            # Encode frame as JPEG
-            # Use lower quality to save bandwidth/memory if needed
-            encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), self.frame_quality]
-            _, buffer = cv2.imencode('.jpg', frame, encode_params)
-            
+            # Use fast encoding
+            buffer = self._encode_frame_fast(frame, self.frame_quality)
             frame_b64 = base64.b64encode(buffer).decode('utf-8')
             
             # Broadcast

@@ -15,7 +15,7 @@ export function VideoFeed({
   sourceName,
   isActive,
   onDelete,
-  onMaximize
+  onMaximize,
 }: VideoFeedProps) {
   const [imgSrc, setImgSrc] = useState<string | null>(null);
   const [fps, setFps] = useState(0);
@@ -42,8 +42,9 @@ export function VideoFeed({
         setHasSignal(true);
       }
     };
-    window.addEventListener('video-frame', handleFrame as EventListener);
-    return () => window.removeEventListener('video-frame', handleFrame as EventListener);
+    window.addEventListener("video-frame", handleFrame as EventListener);
+    return () =>
+      window.removeEventListener("video-frame", handleFrame as EventListener);
   }, [cameraId]);
 
   // Signal Watchdog
@@ -58,36 +59,45 @@ export function VideoFeed({
   }, [isActive]);
 
   return (
-    <div className="relative aspect-video bg-black border border-[#262626] group overflow-hidden w-full" style={{ aspectRatio: '16/9' }}>
+    <div
+      className="relative aspect-video bg-black border border-[#262626] group overflow-hidden w-full"
+      style={{ aspectRatio: "16/9" }}
+    >
       <div className="relative w-full h-full">
         {isActive ? (
           hasSignal && imgSrc ? (
-            <img src={imgSrc} className="w-full h-full object-contain" alt={sourceName} />
+            <img
+              src={imgSrc}
+              className="w-full h-full object-contain"
+              alt={sourceName}
+            />
           ) : (
-             // Active but No Signal / Connecting
-             <div className="absolute inset-0 flex items-center justify-center bg-[#050505]">
-               <div className="flex flex-col items-center gap-3">
-                 <div className="relative">
-                    <div className="w-8 h-8 rounded-full border-2 border-[#333] border-t-white animate-spin" />
-                    <div className="absolute inset-0 flex items-center justify-center">
-                        <AlertTriangle className="w-3 h-3 text-[#333]" />
-                    </div>
-                 </div>
-                 <div className="flex flex-col items-center">
-                    <span className="text-xs font-mono text-white tracking-widest uppercase mb-1">
-                        {imgSrc ? 'NO SIGNAL' : 'CONNECTING'}
-                    </span>
-                    <span className="text-[9px] text-[#666] font-mono">
-                        {imgSrc ? 'SOURCE UNAVAILABLE' : 'WAITING FOR STREAM'}
-                    </span>
-                 </div>
-               </div>
-             </div>
+            // Active but No Signal / Connecting
+            <div className="absolute inset-0 flex items-center justify-center bg-[#050505]">
+              <div className="flex flex-col items-center gap-3">
+                <div className="relative">
+                  <div className="w-8 h-8 rounded-full border-2 border-red-800 border-t-white animate-spin" />
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <AlertTriangle className="w-3 h-3 text-red-800" />
+                  </div>
+                </div>
+                <div className="flex flex-col items-center">
+                  <span className="text-xs font-mono text-white tracking-widest uppercase mb-1">
+                    {imgSrc ? "NO SIGNAL" : "CONNECTING"}
+                  </span>
+                  <span className="text-[9px] text-[#666] font-mono">
+                    {imgSrc ? "SOURCE UNAVAILABLE" : "WAITING FOR STREAM"}
+                  </span>
+                </div>
+              </div>
+            </div>
           )
         ) : (
           <div className="absolute inset-0 flex items-center justify-center bg-black bg-dot-pattern opacity-50">
             <div className="flex flex-col items-center gap-2">
-              <span className="text-[10px] font-mono text-[#333] uppercase tracking-widest">Feed_Terminated</span>
+              <span className="text-[10px] font-mono text-red-800 uppercase tracking-widest">
+                Feed_Terminated
+              </span>
             </div>
           </div>
         )}
@@ -98,12 +108,18 @@ export function VideoFeed({
         {/* Top Info Bar */}
         <div className="absolute top-0 left-0 right-0 p-2 flex justify-between items-start bg-gradient-to-b from-black/80 to-transparent">
           <div className="flex flex-col">
-            <span className="text-white text-[10px] font-bold font-mono tracking-wider">{sourceName}</span>
-            <span className="text-[#666] text-[8px] font-mono uppercase">CAM_{cameraId.toString().padStart(2, '0')}</span>
+            <span className="text-white text-[10px] font-bold font-mono tracking-wider">
+              {sourceName}
+            </span>
+            <span className="text-[#666] text-[8px] font-mono uppercase">
+              CAM_{cameraId.toString().padStart(2, "0")}
+            </span>
           </div>
           <div className="flex gap-2">
             <span className="text-[#444] text-[9px] font-mono">{fps} FPS</span>
-            {isActive && <div className="w-2 h-2 bg-red-600 rounded-full animate-pulse" />}
+            {isActive && (
+              <div className="w-2 h-2 bg-red-600 rounded-full animate-pulse" />
+            )}
           </div>
         </div>
 
@@ -120,11 +136,23 @@ export function VideoFeed({
       </div>
 
       {/* Hover Controls */}
-      <div className="absolute bottom-0 left-0 right-0 p-2 bg-black/90 translate-y-full group-hover:translate-y-0 transition-transform duration-150 flex justify-between items-center border-t border-[#333]">
-        <span className="text-[9px] text-[#444] font-mono uppercase tracking-widest">SECURE_LINK</span>
+      <div className="absolute bottom-0 left-0 right-0 p-2 bg-black/90 translate-y-full group-hover:translate-y-0 transition-transform duration-150 flex justify-between items-center border-t border-red-800">
+        <span className="text-[9px] text-[#444] font-mono uppercase tracking-widest">
+          SECURE_LINK
+        </span>
         <div className="flex gap-1">
-          <button onClick={onMaximize} className="p-1.5 hover:bg-white hover:text-black text-[#888] transition-colors"><Maximize2 className="w-3 h-3" /></button>
-          <button onClick={onDelete} className="p-1.5 hover:bg-red-900 hover:text-white text-[#888] transition-colors"><Trash2 className="w-3 h-3" /></button>
+          <button
+            onClick={onMaximize}
+            className="p-1.5 hover:bg-white hover:text-black text-[#888] transition-colors"
+          >
+            <Maximize2 className="w-3 h-3" />
+          </button>
+          <button
+            onClick={onDelete}
+            className="p-1.5 hover:bg-red-900 hover:text-white text-[#888] transition-colors"
+          >
+            <Trash2 className="w-3 h-3" />
+          </button>
         </div>
       </div>
     </div>

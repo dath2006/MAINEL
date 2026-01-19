@@ -138,6 +138,32 @@ class Settings(BaseSettings):
         description="Compute device: 'cuda' or 'cpu'"
     )
     
+    # TensorRT Optimization Settings
+    use_tensorrt: bool = Field(
+        default=True,
+        description="Enable TensorRT optimization for ONNX models (requires NVIDIA GPU)"
+    )
+    tensorrt_fp16: bool = Field(
+        default=True,
+        description="Enable FP16 precision for TensorRT (2-3x speedup, <1% accuracy loss)"
+    )
+    tensorrt_int8: bool = Field(
+        default=False,
+        description="Enable INT8 quantization (Phase 2: requires calibration)"
+    )
+    tensorrt_batch_size: int = Field(
+        default=8,
+        description="Fixed batch size for multi-camera processing"
+    )
+    tensorrt_workspace_gb: int = Field(
+        default=4,
+        description="TensorRT workspace memory in GB"
+    )
+    tensorrt_cache_path: str = Field(
+        default="./trt_cache",
+        description="Path to store TensorRT engine cache"
+    )
+    
     # ONNX Runtime Settings
     use_onnx: bool = Field(
         default=True,

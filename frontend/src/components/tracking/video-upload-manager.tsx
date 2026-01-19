@@ -6,8 +6,21 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Trash2, Upload, RefreshCw, Film, Clock, HardDrive, AlertCircle } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Trash2,
+  Upload,
+  RefreshCw,
+  Film,
+  Clock,
+  HardDrive,
+  AlertCircle,
+} from "lucide-react";
 import { VideoMetadata, videoLibraryApi } from "@/lib/api";
 
 export function VideoUploadManager() {
@@ -16,8 +29,10 @@ export function VideoUploadManager() {
   const [uploading, setUploading] = useState(false);
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [videoToDelete, setVideoToDelete] = useState<VideoMetadata | null>(null);
-  
+  const [videoToDelete, setVideoToDelete] = useState<VideoMetadata | null>(
+    null,
+  );
+
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadDescription, setUploadDescription] = useState("");
   const [uploadTags, setUploadTags] = useState("");
@@ -44,7 +59,11 @@ export function VideoUploadManager() {
 
     try {
       setUploading(true);
-      await videoLibraryApi.uploadToLibrary(uploadFile, uploadDescription, uploadTags);
+      await videoLibraryApi.uploadToLibrary(
+        uploadFile,
+        uploadDescription,
+        uploadTags,
+      );
       setUploadDialogOpen(false);
       setUploadFile(null);
       setUploadDescription("");
@@ -52,7 +71,9 @@ export function VideoUploadManager() {
       await fetchVideos();
     } catch (error) {
       console.error("Upload failed:", error);
-      alert(`Upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      alert(
+        `Upload failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
     } finally {
       setUploading(false);
     }
@@ -68,14 +89,16 @@ export function VideoUploadManager() {
       await fetchVideos();
     } catch (error) {
       console.error("Delete failed:", error);
-      alert(`Delete failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      alert(
+        `Delete failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
     }
   };
 
   const formatDuration = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
+    return `${mins}:${secs.toString().padStart(2, "0")}`;
   };
 
   const formatFileSize = (bytes: number) => {
@@ -85,7 +108,7 @@ export function VideoUploadManager() {
 
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr);
-    return date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
+    return date.toLocaleDateString() + " " + date.toLocaleTimeString();
   };
 
   return (
@@ -103,7 +126,9 @@ export function VideoUploadManager() {
               onClick={fetchVideos}
               className="h-7 w-7 rounded-none text-[#666] hover:text-white"
             >
-              <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
+              <RefreshCw
+                className={`h-3 w-3 ${loading ? "animate-spin" : ""}`}
+              />
             </Button>
             <Button
               onClick={() => setUploadDialogOpen(true)}
@@ -135,7 +160,7 @@ export function VideoUploadManager() {
                 >
                   {/* Thumbnail */}
                   <div className="w-32 h-18 bg-[#111] border border-[#262626] flex items-center justify-center flex-shrink-0">
-                    <Film className="h-6 w-6 text-[#333]" />
+                    <Film className="h-6 w-6 text-red-800" />
                   </div>
 
                   {/* Info */}
@@ -149,7 +174,10 @@ export function VideoUploadManager() {
                         {formatDuration(video.duration)}
                       </span>
                       <span>•</span>
-                      <span>{video.width}x{video.height} @ {video.fps.toFixed(1)} fps</span>
+                      <span>
+                        {video.width}x{video.height} @ {video.fps.toFixed(1)}{" "}
+                        fps
+                      </span>
                       <span>•</span>
                       <span className="flex items-center gap-1">
                         <HardDrive className="h-3 w-3" />
@@ -217,7 +245,7 @@ export function VideoUploadManager() {
                 onClick={() => fileInputRef.current?.click()}
                 className="w-full rounded-none border-[#262626] bg-[#050505] text-xs h-10 hover:bg-[#111] hover:border-white"
               >
-                {uploadFile ? uploadFile.name : 'Choose File...'}
+                {uploadFile ? uploadFile.name : "Choose File..."}
               </Button>
             </div>
 
@@ -258,7 +286,7 @@ export function VideoUploadManager() {
                 disabled={!uploadFile || uploading}
                 className="flex-1 rounded-none bg-white text-black hover:bg-[#ccc] text-xs h-9 disabled:opacity-50"
               >
-                {uploading ? 'Uploading...' : 'Upload'}
+                {uploading ? "Uploading..." : "Upload"}
               </Button>
             </div>
           </div>
@@ -283,12 +311,14 @@ export function VideoUploadManager() {
                   {videoToDelete.original_filename}
                 </div>
                 <div className="text-[10px] text-[#666] font-mono">
-                  {formatFileSize(videoToDelete.file_size)} • {videoToDelete.width}x{videoToDelete.height}
+                  {formatFileSize(videoToDelete.file_size)} •{" "}
+                  {videoToDelete.width}x{videoToDelete.height}
                 </div>
               </div>
             )}
             <div className="text-[10px] text-[#888]">
-              This action cannot be undone. The video file will be permanently deleted.
+              This action cannot be undone. The video file will be permanently
+              deleted.
             </div>
 
             <div className="flex gap-2 pt-2">

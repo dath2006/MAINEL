@@ -69,17 +69,38 @@ class NvidiaReIDExtractor:
         
         self.device = device
         
-        # Configure providers
+        # Configure providers with TensorRT optimization
         if device == 'cuda':
-            self.providers = [
-                ('CUDAExecutionProvider', {
+            available = ort.get_available_providers()
+            self.providers = []
+            
+            # Try TensorRT first (highest performance)
+            # Note: Provider name can be 'TensorrtExecutionProvider' or 'TensorRTExecutionProvider'
+            has_trt = any('tensorrt' in p.lower() for p in available)
+            trt_provider = next((p for p in available if 'tensorrt' in p.lower()), None)
+            
+            if has_trt and trt_provider:
+                trt_options = {
+                    'trt_fp16_enable': True,  # Enable FP16 for 2-3x speedup
+                    'trt_engine_cache_enable': True,
+                    'trt_engine_cache_path': './trt_cache/reidnet',
+                    'trt_max_workspace_size': gpu_mem_limit * 1024 * 1024 * 1024,
+                    'trt_max_partition_iterations': 1000,
+                    'trt_min_subgraph_size': 1,
+                }
+                self.providers.append((trt_provider, trt_options))
+                logger.info(f"Using {trt_provider} with FP16 for ReID")
+            
+            # Fallback to CUDA
+            if 'CUDAExecutionProvider' in available:
+                self.providers.append(('CUDAExecutionProvider', {
                     'device_id': 0,
                     'arena_extend_strategy': 'kNextPowerOfTwo',
                     'gpu_mem_limit': gpu_mem_limit * 1024 * 1024 * 1024,
                     'cudnn_conv_algo_search': 'EXHAUSTIVE',
-                }),
-                'CPUExecutionProvider'
-            ]
+                }))
+            
+            self.providers.append('CPUExecutionProvider')
         else:
             self.providers = ['CPUExecutionProvider']
         

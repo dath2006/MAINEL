@@ -1,4 +1,4 @@
-'use client';
+"use client";
 
 import {
   Users,
@@ -8,7 +8,7 @@ import {
   Camera,
   Radio,
   BarChart,
-  HardDrive
+  HardDrive,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -39,14 +39,17 @@ export function AppSidebar() {
   useEffect(() => {
     setMounted(true);
     // Mock FS state check
-    const interval = setInterval(() => setWsState(prev => !prev), 5000);
+    const interval = setInterval(() => setWsState((prev) => !prev), 5000);
     return () => clearInterval(interval);
   }, []);
 
   if (!mounted) return null;
 
   return (
-    <Sidebar className="border-r border-[#262626] bg-[#000000] w-[64px]" collapsible="none">
+    <Sidebar
+      className="border-r border-[#262626] bg-[#000000] w-[64px]"
+      collapsible="none"
+    >
       {/* Heavy Top Slab */}
       <SidebarHeader className="h-14 border-b border-[#262626] flex items-center justify-center bg-black">
         <div className="w-8 h-8 bg-white flex items-center justify-center">
@@ -69,7 +72,7 @@ export function AppSidebar() {
                         "h-10 w-10 justify-center rounded-none transition-none border border-transparent",
                         isActive
                           ? "bg-white text-black hover:bg-white hover:text-black"
-                          : "bg-[#111] text-[#666] hover:bg-[#222] hover:text-[#888] hover:border-[#333]"
+                          : "bg-[#111] text-[#666] hover:bg-[#222] hover:text-[#888] hover:border-red-800",
                       )}
                       tooltip={item.name}
                     >
@@ -89,11 +92,16 @@ export function AppSidebar() {
         <div className="flex flex-col items-center gap-2 py-4">
           {/* Status Indicators */}
           <div className="w-10 h-10 border border-[#262626] bg-[#050505] flex flex-col items-center justify-center gap-1">
-            <div className={cn("w-1.5 h-1.5 rounded-full", wsState ? "bg-white" : "bg-[#333]")} />
+            <div
+              className={cn(
+                "w-1.5 h-1.5 rounded-full",
+                wsState ? "bg-white" : "bg-red-800",
+              )}
+            />
             <span className="text-[8px] text-[#444] font-mono">NET</span>
           </div>
           <div className="w-10 h-10 border border-[#262626] bg-[#050505] flex flex-col items-center justify-center gap-1">
-            <div className="w-1.5 h-1.5 rounded-full bg-[#333]" />
+            <div className="w-1.5 h-1.5 rounded-full bg-red-800" />
             <span className="text-[8px] text-[#444] font-mono">REC</span>
           </div>
         </div>

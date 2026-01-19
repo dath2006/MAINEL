@@ -1,7 +1,12 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
@@ -14,7 +19,11 @@ interface VideoLibraryDialogProps {
   onSelectVideo: (video: VideoMetadata) => void;
 }
 
-export function VideoLibraryDialog({ open, onClose, onSelectVideo }: VideoLibraryDialogProps) {
+export function VideoLibraryDialog({
+  open,
+  onClose,
+  onSelectVideo,
+}: VideoLibraryDialogProps) {
   const [videos, setVideos] = useState<VideoMetadata[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -38,15 +47,16 @@ export function VideoLibraryDialog({ open, onClose, onSelectVideo }: VideoLibrar
     }
   }, [open]);
 
-  const filteredVideos = videos.filter((v) =>
-    v.original_filename.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    v.description?.toLowerCase().includes(searchQuery.toLowerCase())
+  const filteredVideos = videos.filter(
+    (v) =>
+      v.original_filename.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      v.description?.toLowerCase().includes(searchQuery.toLowerCase()),
   );
 
   const formatDuration = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
+    return `${mins}:${secs.toString().padStart(2, "0")}`;
   };
 
   const formatFileSize = (bytes: number) => {
@@ -55,7 +65,7 @@ export function VideoLibraryDialog({ open, onClose, onSelectVideo }: VideoLibrar
   };
 
   const handleSelect = () => {
-    const video = videos.find(v => v.id === selectedVideoId);
+    const video = videos.find((v) => v.id === selectedVideoId);
     if (video) {
       onSelectVideo(video);
       onClose();
@@ -87,7 +97,9 @@ export function VideoLibraryDialog({ open, onClose, onSelectVideo }: VideoLibrar
               onClick={fetchVideos}
               className="h-9 w-9 rounded-none text-[#666] hover:text-white border border-[#262626]"
             >
-              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+              <RefreshCw
+                className={`h-4 w-4 ${loading ? "animate-spin" : ""}`}
+              />
             </Button>
           </div>
 
@@ -99,7 +111,7 @@ export function VideoLibraryDialog({ open, onClose, onSelectVideo }: VideoLibrar
               </div>
             ) : filteredVideos.length === 0 ? (
               <div className="text-center text-[#666] py-12 text-xs uppercase tracking-widest">
-                {searchQuery ? 'No matching videos' : 'No videos in library'}
+                {searchQuery ? "No matching videos" : "No videos in library"}
               </div>
             ) : (
               <div className="grid grid-cols-2 md:grid-cols-3 gap-3 pr-2">
@@ -109,14 +121,16 @@ export function VideoLibraryDialog({ open, onClose, onSelectVideo }: VideoLibrar
                     onClick={() => setSelectedVideoId(video.id)}
                     className={`
                       group cursor-pointer border transition-all
-                      ${selectedVideoId === video.id 
-                        ? 'border-white bg-[#111]' 
-                        : 'border-[#262626] hover:border-[#444] bg-black'}
+                      ${
+                        selectedVideoId === video.id
+                          ? "border-white bg-[#111]"
+                          : "border-[#262626] hover:border-[#444] bg-black"
+                      }
                     `}
                   >
                     {/* Thumbnail Placeholder */}
                     <div className="aspect-video bg-[#0a0a0a] flex items-center justify-center border-b border-[#262626] relative">
-                      <Film className="h-8 w-8 text-[#333]" />
+                      <Film className="h-8 w-8 text-red-800" />
                       {selectedVideoId === video.id && (
                         <div className="absolute inset-0 border-2 border-white pointer-events-none" />
                       )}
@@ -133,7 +147,9 @@ export function VideoLibraryDialog({ open, onClose, onSelectVideo }: VideoLibrar
                           {formatDuration(video.duration)}
                         </span>
                         <span>•</span>
-                        <span>{video.width}x{video.height}</span>
+                        <span>
+                          {video.width}x{video.height}
+                        </span>
                       </div>
                       <div className="flex items-center gap-2 text-[9px] text-[#666] font-mono">
                         <HardDrive className="h-3 w-3" />

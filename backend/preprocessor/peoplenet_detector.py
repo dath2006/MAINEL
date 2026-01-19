@@ -87,13 +87,33 @@ class PeopleNetDetector:
         print(f"[PeopleNet] Input shape: 3x{MODEL_H}x{MODEL_W}")
     
     def _init_session(self):
-        """Initialize ONNX Runtime inference session."""
+        """Initialize ONNX Runtime inference session with TensorRT optimization."""
         providers = []
         
         if self.device == 'cuda':
-            if 'CUDAExecutionProvider' in ort.get_available_providers():
+            available = ort.get_available_providers()
+            
+            # Try TensorRT first (highest performance)
+            # Note: Provider name can be 'TensorrtExecutionProvider' or 'TensorRTExecutionProvider'
+            has_trt = any('tensorrt' in p.lower() for p in available)
+            trt_provider = next((p for p in available if 'tensorrt' in p.lower()), None)
+            
+            if has_trt and trt_provider:
+                trt_options = {
+                    'trt_fp16_enable': True,  # Enable FP16 for 2-3x speedup
+                    'trt_engine_cache_enable': True,
+                    'trt_engine_cache_path': './trt_cache/peoplenet',
+                    'trt_max_workspace_size': 4 * 1024 * 1024 * 1024,  # 4GB
+                    'trt_max_partition_iterations': 1000,
+                    'trt_min_subgraph_size': 1,
+                }
+                providers.append((trt_provider, trt_options))
+                print(f"[PeopleNet] Using {trt_provider} with FP16")
+            
+            # Fallback to CUDA
+            elif 'CUDAExecutionProvider' in available:
                 providers.append('CUDAExecutionProvider')
-                print("[PeopleNet] Using CUDA execution provider")
+                print("[PeopleNet] Using CUDA execution provider (TensorRT unavailable)")
             else:
                 print("[PeopleNet] CUDA not available, falling back to CPU")
         
@@ -234,6 +254,90 @@ class PeopleNetDetector:
             det['class_name'] = self.CLASSES[det['class_id']]
         
         return detections
+    
+    def detect_batch(
+        self,
+        images: List[np.ndarray],
+        confidence_threshold: float = None,
+        classes: List[str] = None
+    ) -> List[List[dict]]:
+        """
+        Detect objects in a batch of images (TensorRT optimized).
+        
+        Args:
+            images: List of input images in BGR format
+            confidence_threshold: Optional override for confidence threshold
+            classes: Optional list of class names to detect (default: all)
+            
+        Returns:
+            List of detection lists (one per image)
+        """
+        if confidence_threshold is None:
+            confidence_threshold = self.confidence_threshold
+        
+        # Convert class names to indices
+        if classes:
+            analysis_classes = [self.CLASSES.index(c) for c in classes if c in self.CLASSES]
+        else:
+            analysis_classes = None
+        
+        # Preprocess all images
+        batch_tensors = []
+        orig_sizes = []
+        
+        for image in images:
+            input_tensor, orig_h, orig_w = self.preprocess(image)
+            batch_tensors.append(input_tensor.squeeze(0))  # Remove batch dim, will stack later
+            orig_sizes.append((orig_h, orig_w))
+        
+        # Stack into batch (N, C, H, W)
+        batch_input = np.stack(batch_tensors, axis=0)
+        
+        # Run batched inference
+        outputs = self.session.run(None, {self.input_name: batch_input})
+        
+        # Parse outputs
+        output_cov = None
+        output_bbox = None
+        
+        for output in outputs:
+            if output.shape[1] == len(self.CLASSES):
+                output_cov = output
+            elif output.shape[1] == len(self.CLASSES) * 4:
+                output_bbox = output
+        
+        if output_cov is None or output_bbox is None:
+            raise ValueError(f"Unexpected output shapes: {[o.shape for o in outputs]}")
+        
+        # Post-process each image in batch
+        all_detections = []
+        
+        for i, (orig_h, orig_w) in enumerate(orig_sizes):
+            # Extract outputs for this image
+            img_bbox = output_bbox[i:i+1]  # Keep batch dim
+            img_cov = output_cov[i:i+1]
+            
+            # Post-process
+            detections = postprocess_detectnet_vectorized(
+                output_bbox=img_bbox,
+                output_cov=img_cov,
+                num_classes=len(self.CLASSES),
+                min_confidence=confidence_threshold,
+                analysis_classes=analysis_classes,
+                orig_width=orig_w,
+                orig_height=orig_h
+            )
+            
+            # Apply NMS
+            detections = nms(detections, self.nms_threshold)
+            
+            # Add class names
+            for det in detections:
+                det['class_name'] = self.CLASSES[det['class_id']]
+            
+            all_detections.append(detections)
+        
+        return all_detections
     
     def detect_persons(
         self,

@@ -236,12 +236,6 @@ def postprocess_detectnet_vectorized(
         # Get coverage for this class
         cov = output_cov[0, c, :, :]  # Shape: (GRID_H, GRID_W)
         
-        # Debug: Show max coverage for each class
-        max_cov = float(cov.max())
-        class_names = ['person', 'bag', 'face']
-        if c < len(class_names):
-            print(f"[PostProcess] Class {c} ({class_names[c]}): max_cov={max_cov:.4f}, threshold={min_confidence}")
-        
         # Find grid cells above threshold
         mask = cov >= min_confidence
         if not np.any(mask):

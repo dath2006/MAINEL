@@ -42,11 +42,20 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY app/ app/
 COPY preprocessor/ preprocessor/
+COPY scripts/ scripts/
 COPY alembic/ alembic/
 COPY alembic.ini .
 
-# Create directories for model weights and uploads
-RUN mkdir -p model_weights uploads videos
+# Create directories for model weights, uploads, and TensorRT cache
+RUN mkdir -p model_weights uploads videos trt_cache/peoplenet trt_cache/reidnet trt_cache/timing_cache
+
+# Copy model weights (these should be built into the image or mounted as volume)
+# COPY model_weights/ model_weights/
+
+# Prebuild TensorRT engines (CRITICAL: Do this AFTER model weights are in place)
+# This step takes 2-5 minutes but eliminates first-run delays
+# Skip if models aren't present yet (can run manually after deployment)
+# RUN python scripts/build_tensorrt_engines.py || echo "TensorRT engine prebuild skipped (models not found or GPU not available)"
 
 # Expose port
 EXPOSE 8000
