@@ -202,20 +202,25 @@ class ReIDService:
             
             # Accept match if above EITHER threshold (lenient for cross-camera)
             # The key insight: it's better to merge potentially-same people than
-            # to create duplicate IDs that can never be merged later
+            # to create duplicate IDs that can never be merged later.
+            
+            # STRATEGY CHANGE: Always prefer existing ID if there is ANY plausible candidate.
+            # Only create new ID if similarity is very low.
+            
+            # Primary check: High confidence visual match
             should_match = visual_sim >= self.match_threshold
             
-            # Tentative match: Between new_threshold and match_threshold
-            # Accept if there's reasonable visual similarity AND ST supports it
-            if not should_match and visual_sim >= self.new_threshold:
-                # If same camera, lower the bar further (intra-camera is easier)
-                entry = self.visual_matcher.gallery[global_id]
-                if entry.last_camera_id == camera_id:
-                    should_match = True
-                    logger.debug(f"Tentative same-camera match: {global_id[:8]} visual={visual_sim:.3f}")
-                elif st_prob > 0.3:  # ST says transition is plausible
-                    should_match = True
-                    logger.debug(f"Tentative cross-camera match (ST plausible): {global_id[:8]} visual={visual_sim:.3f}")
+            # Secondary check: Tentative match (Moderate visual similarity)
+            # Accept if > new_threshold/2 (very lenient)
+            if not should_match and visual_sim >= (self.new_threshold * 0.8):
+                 should_match = True
+                 logger.debug(f"Tentative match accepted (lenient): {global_id[:8]} visual={visual_sim:.3f}")
+            
+            # Tertiary check: Spatio-temporal support
+            if not should_match and st_prob > 0.3 and visual_sim > 0.3:
+                 should_match = True
+                 logger.debug(f"ST-supported match: {global_id[:8]} st={st_prob:.3f} visual={visual_sim:.3f}")
+
             
             if should_match:
                 # Update gallery with new observation

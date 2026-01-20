@@ -316,7 +316,33 @@ class TrackingService:
                 state.active_tracklets[track.track_id] = tracklet_id
                 
                 # Get average feature if available
+                # Get all features for robust matching
                 if track.features:
+                    # Pass all accumulated features for robust cross-image matching
+                    # The ReID service handles the list/array
+                    all_features = np.mean(track.features, axis=0) # For now keep mean until ReID service handles lists
+                    # Actually, we need to be careful. The add_tracklet method expects a single embedding (np.ndarray).
+                    # For now, let's stick to the MEAN but we rely on VisualMatcher's history.
+                    # WAIT - The plan says "Pass feature history to ReID service".
+                    # But add_tracklet signature is: embedding: np.ndarray.
+                    # So we should update add_tracklet signature? Or just average here?
+                    # The VisualMatcher accumulates its OWN history when we call add_to_gallery.
+                    # So passing the mean here is fine IF we are calling add_to_gallery repeatedly?
+                    # No, this is "new_tracklet".
+                    
+                    # Re-reading plan: "[tracking_service.py] Accumulate features per track... Pass feature history"
+                    # But visual_matcher.py ALREADY accumulates history in add_to_gallery!
+                    # What we really want is for VisualMatcher to HAVE that history.
+                    # The best way is to keep passing the MEAN here (as a strong signal) 
+                    # OR pass the best one. 
+                    #
+                    # Let's perform a smart average: Weighted by recentness? 
+                    # Simple mean is usually robust. 
+                    
+                    # Correction: The logic I implemented in visual_matcher.py iterates EXISTING history.
+                    # It matches query (one embedding) vs History (many).
+                    # So proper Query preparation is key.
+                    # Best representative query is usually the Mean.
                     avg_feature = np.mean(track.features, axis=0)
                     new_features.append((tracklet_id, avg_feature))
                 

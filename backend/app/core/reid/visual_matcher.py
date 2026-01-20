@@ -214,18 +214,28 @@ class VisualMatcher:
             avg_similarity = float(np.dot(query_embedding, entry.embedding))
             
             # Score 2: MAX similarity against all GalleryStore embeddings (robust)
-            max_similarity = avg_similarity  # default to avg if GalleryStore not available
+            # AND against local history (critical for immediate re-matching)
+            max_similarity = avg_similarity
+            
+            # Check local history first
+            if hasattr(entry, 'embeddings_history') and entry.embeddings_history:
+                 for hist_emb in entry.embeddings_history:
+                     hist_norm = hist_emb / (np.linalg.norm(hist_emb) + 1e-8)
+                     sim = float(np.dot(query_embedding, hist_norm))
+                     max_similarity = max(max_similarity, sim)
+            
+            # Check GalleryStore if available
             if gallery_store:
                 gs_max = gallery_store.compute_max_similarity(query_embedding, global_id)
                 if gs_max > 0:
-                    max_similarity = gs_max
+                    max_similarity = max(max_similarity, gs_max)
             
             # Use the higher of the two for matching decision
             similarity = max(avg_similarity, max_similarity)
             
             logger.debug(
                 f"Match check: {global_id[:8]} cam={entry.last_camera_id} "
-                f"avg_sim={avg_similarity:.3f} max_sim={max_similarity:.3f} "
+                f"avg={avg_similarity:.3f} max={max_similarity:.3f} "
                 f"final={similarity:.3f}"
             )
             results.append((global_id, similarity, entry))
