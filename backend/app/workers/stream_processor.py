@@ -109,8 +109,12 @@ class StreamProcessor:
         logger.info("StreamProcessor stopped")
     
     def _run_loop(self):
-        """Main processing loop."""
+        """Main processing loop with dynamic batching for GPU efficiency."""
         stream_manager = get_stream_manager()
+        
+        # Batching configuration
+        BATCH_SIZE = 8  # Max frames per batch
+        BATCH_TIMEOUT = 0.010  # 10ms max wait to fill batch
         
         # Try to get ML services, but don't fail if unavailable
         tracking_service = None
@@ -122,33 +126,41 @@ class StreamProcessor:
         except Exception as e:
             logger.warning(f"ML services not available (frames will still stream): {e}")
         
+        batch_frames = []  # Accumulate frames for batch processing
+        
         while self._running:
             # Check if playing
             if stream_manager.state != PlaybackState.PLAYING:
                 time.sleep(0.1)
                 continue
             
-            # Frame Skipping: Drain queue to get the latest frame
-            # This prevents lag if processing is slower than capture
-            while stream_manager.frame_queue.qsize() > 1:
-                try:
-                    _ = stream_manager.frame_queue.get_nowait()
-                    stream_manager.frame_queue.task_done()
-                except:
-                    break
-
-            # Get frame from queue
-            frame_data = stream_manager.get_next_frame(timeout=0.5)
-            if frame_data is None:
+            # Greedy batch collection
+            try:
+                # Dynamic timeout: shorter if we already have frames
+                timeout = BATCH_TIMEOUT if len(batch_frames) > 0 else 0.05
+                
+                frame_data = stream_manager.get_next_frame(timeout=timeout)
+                if frame_data is not None:
+                    batch_frames.append(frame_data)
+                    self._frame_count += 1
+                    self._fps_frame_count += 1
+                
+                # Process batch if full or timeout with pending frames
+                should_process = (
+                    len(batch_frames) >= BATCH_SIZE or
+                    (frame_data is None and len(batch_frames) > 0)
+                )
+                
+                if not should_process and len(batch_frames) > 0:
+                    # Check if we've waited long enough
+                    continue
+                
+            except Exception as e:
+                # On timeout or error, process what we have
+                should_process = len(batch_frames) > 0
+            
+            if not batch_frames:
                 continue
-            
-            self._frame_count += 1
-            self._fps_frame_count += 1
-            
-            # Check for black frames (common webcam issue)
-            if self._frame_count % 100 == 0:
-                if np.mean(frame_data.frame) < 1.0:
-                    logger.warning(f"Source {frame_data.source_id} is producing black frames (mean < 1.0)")
             
             # Calculate FPS
             now = time.time()
@@ -157,80 +169,237 @@ class StreamProcessor:
                 self._fps_frame_count = 0
                 self._last_fps_time = now
             
-            # Skip ML processing based on interval
-            frame_detections = []
-            frame_tracks = []
-            frame_results = {}
+            # Process the batch
+            run_ml = tracking_service is not None
             
-            run_ml = (
-                self._frame_count % self.detection_interval == 0 
-                and tracking_service is not None
-            )
-            
-            if run_ml:
+            if run_ml and len(batch_frames) > 0:
                 try:
-                    # Process frame through pipeline
-                    frame_results = self._process_frame(
-                        frame_data,
+                    # Use batch processing
+                    batch_results = self._process_batch(
+                        batch_frames,
                         tracking_service,
                         reid_service,
                     )
                     
-                    frame_detections = frame_results.get("detections", [])
-                    frame_tracks = frame_results.get("tracks", [])
-                    
-                    # Update sticky state
-                    self._last_detections = frame_detections
-                    self._last_tracks = frame_tracks
-                    
-                    # Broadcast events
-                    self._broadcast_events(frame_data, frame_results)
+                    # Broadcast each frame's results immediately
+                    for frame_data, frame_results in zip(batch_frames, batch_results):
+                        frame_tracks = frame_results.get("tracks", [])
+                        
+                        # Update sticky state with last result
+                        self._last_tracks = frame_tracks
+                        
+                        # Broadcast events
+                        self._broadcast_events(frame_data, frame_results)
+                        
+                        # Broadcast frame with overlays
+                        if self.broadcast_frames:
+                            try:
+                                self._broadcast_frame(
+                                    frame_data,
+                                    [],  # detections
+                                    frame_tracks
+                                )
+                            except Exception as e:
+                                logger.error(f"Error broadcasting frame: {e}")
                     
                 except RuntimeError as e:
-                    if "CUDA" in str(e) and torch:
-                        logger.error(f"CUDA Error during ML processing {self.source_id}: {e}")
-                        if torch.cuda.is_available():
-                            torch.cuda.empty_cache()
+                    if "CUDA" in str(e):
+                        logger.error(f"CUDA Error during batch processing: {e}")
                         import gc
                         gc.collect()
                         time.sleep(0.1)
                     else:
-                        logger.debug(f"RuntimeError in ML processing {self.source_id}: {e}")
+                        logger.debug(f"RuntimeError in batch processing: {e}")
                 except Exception as e:
-                    logger.debug(f"Frame processing error: {e}")
+                    logger.error(f"Batch processing error: {e}")
             else:
-                # Reuse last known results for smoothness
-                frame_detections = self._last_detections
-                frame_tracks = self._last_tracks
+                # No ML - just broadcast frames
+                for frame_data in batch_frames:
+                    if self.broadcast_frames:
+                        try:
+                            self._broadcast_frame(frame_data, [], self._last_tracks)
+                        except Exception as e:
+                            logger.error(f"Error broadcasting frame: {e}")
             
-            # Broadcast frame (with overlays if ML ran)
-            if self.broadcast_frames:
-                try:
-                    self._broadcast_frame(
-                        frame_data, 
-                        frame_detections, 
-                        frame_tracks
-                    )
-                except MemoryError:
-                    logger.error(f"MemoryError in processor for source {frame_data.source_id}. Clearing memory.")
-                    gc.collect()
-                    if torch and torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-                    time.sleep(1)  # Longer pause to let system recover
+            # Clear batch after processing
+            batch_frames = []
+    
+    def _process_batch(
+        self,
+        batch_frames: List[FrameData],
+        tracking_service,
+        reid_service,
+    ) -> List[Dict[str, Any]]:
+        """Process a batch of frames through the ML pipeline with quality scoring."""
+        
+        # Get quality scorer
+        quality_scorer = get_quality_scorer_instance()
+        
+        # Prepare frames for batch processing
+        frames_tuple = [
+            (fd.camera_id, fd.frame, fd.timestamp)
+            for fd in batch_frames
+        ]
+        
+        # Run batch tracking
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            batch_track_results = loop.run_until_complete(
+                tracking_service.process_batch(frames_tuple)
+            )
+        finally:
+            loop.close()
+        
+        # Process results for each frame
+        all_results = []
+        for idx, (tracks, camera_id) in enumerate(batch_track_results):
+            frame_data = batch_frames[idx]
+            frame = frame_data.frame
+            results = {"detections": [], "tracks": [], "reid_matches": []}
+            
+            # ReID matching and quality scoring for confirmed tracks
+            if reid_service:
+                for track in tracks:
+                    if not track.is_confirmed():
+                        continue
+                    
+                    conf = float(track.confidence) if hasattr(track, 'confidence') else 0.0
+                    if conf < 0.5:
+                        continue
+                    
+                    if not track.features:
+                        continue
+                    
+                    feature = track.features[-1]
+                    
+                    # Quality assessment
+                    should_update = False
+                    quality_score = 0.0
+                    thumb_b64 = None
+                    pose = 'unknown'
+                    
+                    bbox = track.to_tlbr()
+                    x1, y1, x2, y2 = map(int, bbox)
+                    h, w = frame.shape[:2]
+                    x1, y1 = max(0, x1), max(0, y1)
+                    x2, y2 = min(w, x2), min(h, y2)
+                    
+                    # Phase 1: Pre-filtering - Validate detection quality
+                    if x2 > x1 and y2 > y1:
+                        bbox_array = np.array([x1, y1, x2, y2])
+                        frame_shape = (h, w)
+                        
+                        is_valid, reason = tracking_service.validate_detection_quality(
+                            bbox=bbox_array,
+                            confidence=conf,
+                            frame_shape=frame_shape,
+                        )
+                        
+                        if not is_valid:
+                            logger.debug(f"[Batch] Rejected detection: {reason}")
+                            continue  # Skip this track for gallery
+                    
+                    if x2 > x1 and y2 > y1 and quality_scorer:
+                        crop = frame[y1:y2, x1:x2]
+                        
+                        # Phase 2: Validate person presence
+
+                        if settings.reid_enable_presence_check:
+                            is_person_present, _ = tracking_service.validate_person_presence(crop)
+                            if not is_person_present:
+                                continue
+                        
+                        # Assess Quality
+                        q_result = quality_scorer.score(crop)
+                        quality_score = q_result.total_score
+                        pose = q_result.pose if hasattr(q_result, 'pose') else 'unknown'
+                        
+                        # High quality - save to gallery
+                        if quality_score > settings.gallery_quality_threshold:
+                            should_update = True
+                            
+                            # Prepare thumbnail
+                            thumb = cv2.resize(crop, (64, 128))
+                            _, buffer = cv2.imencode('.jpg', thumb, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                            thumb_b64 = base64.b64encode(buffer).decode('utf-8')
+                    
+                    # Store quality info on track
+                    track.quality_score = quality_score
+                    track.pose = pose
+                    track.is_saved = should_update
+                    
+                    # ReID matching
+                    current_global_id = getattr(track, 'global_id', None)
+                    
+                    if should_update or current_global_id is None:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        try:
+                            match = loop.run_until_complete(
+                                reid_service.match_identity(
+                                    camera_id=camera_id,
+                                    embedding=feature,
+                                    timestamp=frame_data.timestamp,
+                                )
+                            )
+                            track.global_id = str(match.global_track_id)
+                        finally:
+                            loop.close()
+                        
+                        # Save to gallery if high quality
+                        if should_update and thumb_b64:
+                            gallery_store = get_gallery_store()
+                            gallery_store.add_capture(
+                                global_id=track.global_id,
+                                image_b64=thumb_b64,
+                                quality_score=quality_score,
+                                pose=pose,
+                                sharpness=q_result.sharpness_score if hasattr(q_result, 'sharpness_score') else 0.0,
+                                frame_number=frame_data.frame_number,
+                                timestamp=frame_data.timestamp,
+                                embedding=feature
+                            )
+                    
+                    # Update track store
+                    if getattr(track, 'global_id', None):
+                        try:
+                            track_store = get_track_store()
+                            track_store.add_or_update_track(
+                                track.global_id,
+                                {"status": TrackStatus.ACTIVE}
+                            )
+                            track_store.update_camera_sequence(track.global_id, camera_id)
+                        except Exception as e:
+                            logger.error(f"Failed to update TrackStore: {e}")
+            
+            # Convert tracks to serializable format
+            for track in tracks:
+                conf = float(track.confidence) if hasattr(track, 'confidence') else 0.0
+                if conf < 0.4:
                     continue
-                except RuntimeError as e:
-                    if "CUDA" in str(e) and torch:
-                        logger.error(f"CUDA Error in processor for source {frame_data.source_id}: {e}. Attempting to clear cache.")
-                        if torch.cuda.is_available():
-                            torch.cuda.empty_cache()
-                        gc.collect()
-                        time.sleep(0.1) # Short pause
-                    else:
-                        logger.debug(f"RuntimeError in processor for source {frame_data.source_id}: {e}")
-                    continue
-                except Exception as e:
-                    logger.error(f"Error broadcasting frame for source {frame_data.source_id}: {e}")
-                    continue
+                
+                bbox = track.to_tlbr()
+                face_bbox = getattr(track, 'face_bbox', None)
+                if face_bbox is not None:
+                    face_bbox = [int(x) for x in face_bbox]
+                
+                results["tracks"].append({
+                    "track_id": track.track_id,
+                    "global_id": getattr(track, 'global_id', None),
+                    "bbox": bbox.tolist(),
+                    "face_bbox": face_bbox,
+                    "confidence": conf,
+                    "class_name": getattr(track, 'class_name', 'unknown'),
+                    "state": track.state.name,
+                    "quality_score": getattr(track, 'quality_score', 0.0),
+                    "pose": getattr(track, 'pose', 'unknown'),
+                    "is_saved": getattr(track, 'is_saved', False),
+                })
+            
+            all_results.append(results)
+        
+        return all_results
     
     def _process_frame(
         self,

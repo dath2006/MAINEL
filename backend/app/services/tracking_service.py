@@ -348,6 +348,140 @@ class TrackingService:
         
         return active_tracks, new_features
     
+    async def process_batch(
+        self,
+        frames: List[Tuple[int, np.ndarray, datetime]],
+        extract_features: bool = True,
+    ) -> List[Tuple[List[Track], int]]:
+        """
+        Process a batch of frames from multiple cameras efficiently.
+        
+        Uses batched detection and feature extraction to maximize GPU throughput.
+        DeepSORT tracking is still per-camera (sequential) as it maintains state.
+        
+        Args:
+            frames: List of (camera_id, frame, timestamp) tuples
+            extract_features: Whether to extract ReID features
+            
+        Returns:
+            List of (active_tracks, camera_id) tuples in same order as input
+        """
+        if not frames:
+            return []
+        
+        detector = self._get_detector()
+        
+        # Check if detector supports batch inference
+        if not hasattr(detector, 'detect_batch'):
+            # Fallback to sequential processing
+            results = []
+            for camera_id, frame, timestamp in frames:
+                tracks, _ = await self.process_frame(camera_id, frame, timestamp, extract_features)
+                results.append((tracks, camera_id))
+            return results
+        
+        # 1. Batch Detection - Run inference once on all frames
+        images = [f[1] for f in frames]  # Extract frames
+        batch_detections = detector.detect_batch(images, confidence_threshold=0.3)
+        
+        # 2. Process each frame with its detections - use local storage
+        all_crops = []
+        crop_indices = []  # Track which (frame_idx, det_idx) each crop belongs to
+        frame_data = {}  # Local storage: frame_idx -> {detections, face_dets, timestamp}
+        
+        for frame_idx, (camera_id, frame, timestamp) in enumerate(frames):
+            raw_all = batch_detections[frame_idx]
+            
+            # Separate persons and faces
+            person_dets = [d for d in raw_all if d.get('class_name') == 'person' and d.get('confidence', 0) >= 0.4]
+            face_dets = [d for d in raw_all if d.get('class_name') == 'face' and d.get('confidence', 0) >= 0.3]
+            
+            # Convert to Detection objects
+            detections = []
+            for d in person_dets:
+                bbox = BoundingBox(
+                    x=float(d['x1']),
+                    y=float(d['y1']),
+                    width=float(d['x2'] - d['x1']),
+                    height=float(d['y2'] - d['y1']),
+                    confidence=float(d['confidence'])
+                )
+                detections.append(Detection(
+                    camera_id=camera_id,
+                    timestamp=timestamp,
+                    bbox=bbox,
+                    class_id=0,
+                    class_name="person"
+                ))
+            
+            # Crop detections for feature extraction
+            h, w = frame.shape[:2]
+            for det_idx, det in enumerate(detections):
+                x1, y1, x2, y2 = int(det.x1), int(det.y1), int(det.x2), int(det.y2)
+                x1, y1 = max(0, x1), max(0, y1)
+                x2, y2 = min(w, x2), min(h, y2)
+                if x2 > x1 and y2 > y1:
+                    crop = frame[y1:y2, x1:x2]
+                    all_crops.append(crop)
+                    crop_indices.append((frame_idx, det_idx))
+            
+            # Store in local dict
+            frame_data[frame_idx] = {
+                'detections': detections,
+                'face_dets': face_dets,
+                'timestamp': timestamp,
+                'camera_id': camera_id
+            }
+        
+        # 3. Batch Feature Extraction
+        all_features = None
+        if extract_features and all_crops:
+            extractor = self._get_extractor()
+            all_features = extractor.extract_batch(all_crops)
+        
+        # 4. Update trackers and associate features (per-camera, sequential)
+        results = []
+        for frame_idx, (camera_id, frame, timestamp) in enumerate(frames):
+            state = self._get_camera_state(camera_id)
+            fd = frame_data[frame_idx]
+            detections = fd['detections']
+            face_dets = fd['face_dets']
+            
+            # Get features for this frame's detections
+            features = None
+            if all_features is not None and len(detections) > 0:
+                # Get indices of crops belonging to this frame
+                frame_crop_indices = [i for i, (fidx, _) in enumerate(crop_indices) if fidx == frame_idx]
+                if frame_crop_indices:
+                    features = all_features[frame_crop_indices]
+            
+            # Update tracker
+            state.tracker.predict()
+            active_tracks = state.tracker.update(detections, features)
+            
+            # Associate faces with tracks
+            for track in active_tracks:
+                person_box = track.to_tlbr()
+                best_face = None
+                best_score = 0.0
+                for face in face_dets:
+                    face_box = [face['x1'], face['y1'], face['x2'], face['y2']]
+                    face_cx = (face_box[0] + face_box[2]) / 2
+                    face_cy = (face_box[1] + face_box[3]) / 2
+                    inside = (person_box[0] <= face_cx <= person_box[2] and
+                              person_box[1] <= face_cy <= person_box[3])
+                    if inside:
+                        score = 0.5
+                        if score > best_score:
+                            best_score = score
+                            best_face = face_box
+                track.face_bbox = best_face
+            
+            state.last_frame_time = timestamp
+            results.append((active_tracks, camera_id))
+        
+        return results
+    
     def validate_detection_quality(
         self,
         bbox: np.ndarray,

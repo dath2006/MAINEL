@@ -235,6 +235,93 @@ class PeopleNetDetector:
         
         return detections
     
+    def detect_batch(
+        self,
+        images: List[np.ndarray],
+        confidence_threshold: float = None,
+        classes: List[str] = None
+    ) -> List[List[dict]]:
+        """
+        Detect objects in a batch of images efficiently.
+        
+        Uses numpy.stack to create a single batch tensor for GPU inference,
+        significantly improving throughput on high-end GPUs like the L4.
+        
+        Args:
+            images: List of input images in BGR format
+            confidence_threshold: Optional override for confidence threshold
+            classes: Optional list of class names to detect (default: all)
+            
+        Returns:
+            List of detection lists, one per input image
+        """
+        if not images:
+            return []
+        
+        if confidence_threshold is None:
+            confidence_threshold = self.confidence_threshold
+        
+        # Convert class names to indices
+        if classes:
+            analysis_classes = [self.CLASSES.index(c) for c in classes if c in self.CLASSES]
+        else:
+            analysis_classes = None
+        
+        # 1. Preprocess all images and collect original sizes
+        preprocessed = []
+        orig_sizes = []
+        for img in images:
+            tensor, orig_h, orig_w = self.preprocess(img)
+            preprocessed.append(tensor[0])  # Remove batch dim, will stack later
+            orig_sizes.append((orig_h, orig_w))
+        
+        # 2. Stack into single batch tensor (N, 3, H, W)
+        batch_tensor = np.stack(preprocessed, axis=0)
+        
+        # 3. Run inference once on entire batch
+        outputs = self.session.run(None, {self.input_name: batch_tensor})
+        
+        # Find coverage and bbox outputs
+        output_cov = None
+        output_bbox = None
+        for output in outputs:
+            if output.shape[1] == len(self.CLASSES):
+                output_cov = output
+            elif output.shape[1] == len(self.CLASSES) * 4:
+                output_bbox = output
+        
+        if output_cov is None or output_bbox is None:
+            raise ValueError(f"Unexpected batch output shapes: {[o.shape for o in outputs]}")
+        
+        # 4. Post-process each sample in the batch
+        all_detections = []
+        for i in range(len(images)):
+            # Slice outputs for this sample
+            sample_cov = output_cov[i:i+1]  # Keep batch dim for postprocess
+            sample_bbox = output_bbox[i:i+1]
+            orig_h, orig_w = orig_sizes[i]
+            
+            detections = postprocess_detectnet_vectorized(
+                output_bbox=sample_bbox,
+                output_cov=sample_cov,
+                num_classes=len(self.CLASSES),
+                min_confidence=confidence_threshold,
+                analysis_classes=analysis_classes,
+                orig_width=orig_w,
+                orig_height=orig_h
+            )
+            
+            # Apply NMS
+            detections = nms(detections, self.nms_threshold)
+            
+            # Add class names
+            for det in detections:
+                det['class_name'] = self.CLASSES[det['class_id']]
+            
+            all_detections.append(detections)
+        
+        return all_detections
+    
     def detect_persons(
         self,
         image: np.ndarray,

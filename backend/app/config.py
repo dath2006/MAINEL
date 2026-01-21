@@ -88,13 +88,13 @@ class Settings(BaseSettings):
         description="Dimension of ReID feature embeddings (256 for NVIDIA)"
     )
     reid_match_threshold: float = Field(
-        default=0.55,  # INCREASED from 0.40 to reduce false merges
+        default=0.50,  # INCREASED from 0.40 to reduce false merges
         ge=0.0,
         le=1.0,
         description="Cosine similarity threshold for matching to existing identity"
     )
     reid_new_threshold: float = Field(
-        default=0.60,  # INCREASED from 0.50 to create new IDs more readily
+        default=0.50,  # INCREASED from 0.50 to create new IDs more readily
         ge=0.0,
         le=1.0,
         description="Threshold for creating new identity (if best match below this, create new)"
