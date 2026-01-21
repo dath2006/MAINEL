@@ -39,7 +39,7 @@ RUN python -m pip install --upgrade pip
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir numpy==2.2.6 && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu121
 
 # Copy application code
 COPY app/ app/

@@ -109,12 +109,8 @@ class StreamProcessor:
         logger.info("StreamProcessor stopped")
     
     def _run_loop(self):
-        """Main processing loop with dynamic batching for GPU efficiency."""
+        """Main processing loop - sequential frame processing."""
         stream_manager = get_stream_manager()
-        
-        # Batching configuration
-        BATCH_SIZE = 8  # Max frames per batch
-        BATCH_TIMEOUT = 0.010  # 10ms max wait to fill batch
         
         # Try to get ML services, but don't fail if unavailable
         tracking_service = None
@@ -126,41 +122,19 @@ class StreamProcessor:
         except Exception as e:
             logger.warning(f"ML services not available (frames will still stream): {e}")
         
-        batch_frames = []  # Accumulate frames for batch processing
-        
         while self._running:
             # Check if playing
             if stream_manager.state != PlaybackState.PLAYING:
                 time.sleep(0.1)
                 continue
             
-            # Greedy batch collection
-            try:
-                # Dynamic timeout: shorter if we already have frames
-                timeout = BATCH_TIMEOUT if len(batch_frames) > 0 else 0.05
-                
-                frame_data = stream_manager.get_next_frame(timeout=timeout)
-                if frame_data is not None:
-                    batch_frames.append(frame_data)
-                    self._frame_count += 1
-                    self._fps_frame_count += 1
-                
-                # Process batch if full or timeout with pending frames
-                should_process = (
-                    len(batch_frames) >= BATCH_SIZE or
-                    (frame_data is None and len(batch_frames) > 0)
-                )
-                
-                if not should_process and len(batch_frames) > 0:
-                    # Check if we've waited long enough
-                    continue
-                
-            except Exception as e:
-                # On timeout or error, process what we have
-                should_process = len(batch_frames) > 0
-            
-            if not batch_frames:
+            # Get frame from queue
+            frame_data = stream_manager.get_next_frame(timeout=0.5)
+            if frame_data is None:
                 continue
+            
+            self._frame_count += 1
+            self._fps_frame_count += 1
             
             # Calculate FPS
             now = time.time()
@@ -169,60 +143,67 @@ class StreamProcessor:
                 self._fps_frame_count = 0
                 self._last_fps_time = now
             
-            # Process the batch
-            run_ml = tracking_service is not None
+            # Skip ML processing based on interval
+            frame_detections = []
+            frame_tracks = []
+            frame_results = {}
             
-            if run_ml and len(batch_frames) > 0:
+            run_ml = (
+                self._frame_count % self.detection_interval == 0 
+                and tracking_service is not None
+            )
+            
+            if run_ml:
                 try:
-                    # Use batch processing
-                    batch_results = self._process_batch(
-                        batch_frames,
+                    # Process frame through pipeline
+                    frame_results = self._process_frame(
+                        frame_data,
                         tracking_service,
                         reid_service,
                     )
                     
-                    # Broadcast each frame's results immediately
-                    for frame_data, frame_results in zip(batch_frames, batch_results):
-                        frame_tracks = frame_results.get("tracks", [])
-                        
-                        # Update sticky state with last result
-                        self._last_tracks = frame_tracks
-                        
-                        # Broadcast events
-                        self._broadcast_events(frame_data, frame_results)
-                        
-                        # Broadcast frame with overlays
-                        if self.broadcast_frames:
-                            try:
-                                self._broadcast_frame(
-                                    frame_data,
-                                    [],  # detections
-                                    frame_tracks
-                                )
-                            except Exception as e:
-                                logger.error(f"Error broadcasting frame: {e}")
+                    frame_detections = frame_results.get("detections", [])
+                    frame_tracks = frame_results.get("tracks", [])
+                    
+                    # Update sticky state
+                    self._last_detections = frame_detections
+                    self._last_tracks = frame_tracks
+                    
+                    # Broadcast events
+                    self._broadcast_events(frame_data, frame_results)
                     
                 except RuntimeError as e:
                     if "CUDA" in str(e):
-                        logger.error(f"CUDA Error during batch processing: {e}")
+                        logger.error(f"CUDA Error during ML processing: {e}")
                         import gc
                         gc.collect()
                         time.sleep(0.1)
                     else:
-                        logger.debug(f"RuntimeError in batch processing: {e}")
+                        logger.debug(f"RuntimeError in ML processing: {e}")
                 except Exception as e:
-                    logger.error(f"Batch processing error: {e}")
+                    logger.debug(f"Frame processing error: {e}")
             else:
-                # No ML - just broadcast frames
-                for frame_data in batch_frames:
-                    if self.broadcast_frames:
-                        try:
-                            self._broadcast_frame(frame_data, [], self._last_tracks)
-                        except Exception as e:
-                            logger.error(f"Error broadcasting frame: {e}")
+                # Reuse last known results for smoothness
+                frame_detections = self._last_detections
+                frame_tracks = self._last_tracks
             
-            # Clear batch after processing
-            batch_frames = []
+            # Broadcast frame (with overlays if ML ran)
+            if self.broadcast_frames:
+                try:
+                    self._broadcast_frame(
+                        frame_data, 
+                        frame_detections, 
+                        frame_tracks
+                    )
+                except MemoryError:
+                    logger.error(f"MemoryError in processor. Clearing memory.")
+                    import gc
+                    gc.collect()
+                    time.sleep(1)
+                    continue
+                except Exception as e:
+                    logger.error(f"Error broadcasting frame: {e}")
+                    continue
     
     def _process_batch(
         self,
