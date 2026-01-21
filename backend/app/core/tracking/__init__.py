@@ -1,13 +1,13 @@
 """Tracking module."""
 
 from app.core.tracking.kalman import KalmanFilter
-from app.core.tracking.deepsort import (
+from app.core.tracking.bytetrack import (
     Track,
     TrackState,
     CrossCameraTrackState,
     OcclusionInfo,
-    DeepSORTTracker,
-    NearestNeighborDistanceMetric,
+    ByteTrackTracker,
+    DeepSORTTracker,  # Alias for backward compatibility
 )
 from app.core.tracking.base import BaseTracker
 
@@ -17,7 +17,7 @@ __all__ = [
     "TrackState",
     "CrossCameraTrackState",
     "OcclusionInfo",
-    "DeepSORTTracker",
-    "NearestNeighborDistanceMetric",
+    "ByteTrackTracker",
+    "DeepSORTTracker",  # Alias pointing to ByteTrackTracker
     "BaseTracker",
 ]

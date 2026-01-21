@@ -11,7 +11,7 @@ import numpy as np
 from loguru import logger
 
 from app.schemas.track import Detection, BoundingBox
-from app.core.tracking import DeepSORTTracker, Track, TrackState, CrossCameraTrackState
+from app.core.tracking import ByteTrackTracker, Track, TrackState, CrossCameraTrackState
 from app.core.features import NvidiaReIDExtractor
 from app.core.reid import QualityScorer
 from app.config import settings
@@ -31,10 +31,15 @@ class CameraState:
     
     def __init__(self, camera_id: int):
         self.camera_id = camera_id
-        self.tracker = DeepSORTTracker(
-            max_age=settings.deepsort_max_age,
-            n_init=settings.deepsort_n_init,
-            max_iou_distance=settings.deepsort_max_iou_distance,
+        # Use ByteTrack (replaces DeepSORT)
+        self.tracker = ByteTrackTracker(
+            track_thresh=settings.bytetrack_track_thresh,
+            low_thresh=settings.bytetrack_low_thresh,
+            match_thresh=settings.bytetrack_match_thresh,
+            max_age=settings.deepsort_max_age,  # Reuse existing setting
+            n_init=settings.deepsort_n_init,    # Reuse existing setting
+            use_appearance=settings.bytetrack_use_appearance,
+            appearance_thresh=settings.bytetrack_appearance_thresh,
         )
         self.active_tracklets: Dict[int, UUID] = {}  # local_id -> tracklet_uuid
         self.last_frame_time: Optional[datetime] = None

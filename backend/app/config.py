@@ -120,6 +120,36 @@ class Settings(BaseSettings):
         description="Max IOU distance for matching"
     )
     
+    # ByteTrack Settings (now the default tracker)
+    bytetrack_track_thresh: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="High-confidence detection threshold"
+    )
+    bytetrack_low_thresh: float = Field(
+        default=0.1,
+        ge=0.0,
+        le=1.0,
+        description="Low-confidence detection threshold (ByteTrack's key innovation)"
+    )
+    bytetrack_match_thresh: float = Field(
+        default=0.8,
+        ge=0.0,
+        le=1.0,
+        description="IoU threshold for matching"
+    )
+    bytetrack_use_appearance: bool = Field(
+        default=True,
+        description="Use ReID appearance features in addition to IoU"
+    )
+    bytetrack_appearance_thresh: float = Field(
+        default=0.4,
+        ge=0.0,
+        le=1.0,
+        description="Appearance matching threshold"
+    )
+    
     # Spatial-Temporal
     st_weight: float = Field(
         default=0.5,
