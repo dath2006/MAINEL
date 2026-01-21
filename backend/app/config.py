@@ -88,19 +88,19 @@ class Settings(BaseSettings):
         description="Dimension of ReID feature embeddings (256 for NVIDIA)"
     )
     reid_match_threshold: float = Field(
-        default=0.40,  # Lower threshold for cross-camera matching (domain shift)
+        default=0.55,  # INCREASED from 0.40 to reduce false merges
         ge=0.0,
         le=1.0,
         description="Cosine similarity threshold for matching to existing identity"
     )
     reid_new_threshold: float = Field(
-        default=0.50,  # Higher threshold - only create new ID if no match above this
+        default=0.60,  # INCREASED from 0.50 to create new IDs more readily
         ge=0.0,
         le=1.0,
         description="Threshold for creating new identity (if best match below this, create new)"
     )
     reid_merge_threshold: float = Field(
-        default=0.50,
+        default=0.65,  # INCREASED from 0.50 to prevent false merges
         ge=0.0,
         le=1.0,
         description="Threshold for merging fragmented identities in search results"
@@ -219,6 +219,58 @@ class Settings(BaseSettings):
     reid_max_blur_variance: float = Field(
         default=100.0,
         description="Laplacian variance above this is very sharp"
+    )
+    
+    # Gallery Quality Filters (Phase 1+)
+    reid_min_bbox_width: int = Field(
+        default=32,  # Further relaxed from 48
+        description="Minimum person width in pixels"
+    )
+    reid_min_bbox_height: int = Field(
+        default=64,  # Further relaxed from 96
+        description="Minimum person height in pixels"
+    )
+    reid_min_aspect_ratio: float = Field(
+        default=0.3,
+        ge=0.1,
+        le=1.0,
+        description="Minimum height/width ratio for person detection"
+    )
+    reid_max_aspect_ratio: float = Field(
+        default=3.5,
+        ge=1.0,
+        le=10.0,
+        description="Maximum height/width ratio for person detection"
+    )
+    reid_min_frame_coverage: float = Field(
+        default=0.005,
+        ge=0.0,
+        le=1.0,
+        description="Minimum bbox area as fraction of frame (0.5%)"
+    )
+    reid_min_detection_confidence: float = Field(
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        description="Minimum detection confidence for gallery"
+    )
+    
+    # Person Presence Validation (Phase 2)
+    reid_enable_presence_check: bool = Field(
+        default=True,  # Now enabled
+        description="Validate crop contains actual person"
+    )
+    reid_min_crop_variance: float = Field(
+        default=200.0,
+        description="Minimum pixel variance (empty backgrounds too uniform)"
+    )
+    reid_min_edge_density: float = Field(
+        default=0.02,
+        description="Minimum edge pixel ratio (persons have edges)"
+    )
+    reid_min_color_entropy: float = Field(
+        default=1.5,
+        description="Minimum color diversity (persons varied colors)"
     )
     
     # Gallery & Search Settings

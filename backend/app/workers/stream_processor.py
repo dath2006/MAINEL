@@ -293,8 +293,30 @@ class StreamProcessor:
                         x1, y1 = max(0, x1), max(0, y1)
                         x2, y2 = min(w, x2), min(h, y2)
                         
+                        # Phase 1: Pre-filtering - Validate detection quality
+                        if x2 > x1 and y2 > y1:
+                            bbox_array = np.array([x1, y1, x2, y2])
+                            frame_shape = (h, w)
+                            
+                            is_valid, reason = tracking_service.validate_detection_quality(
+                                bbox=bbox_array,
+                                confidence=conf,
+                                frame_shape=frame_shape,
+                            )
+                            
+                            if not is_valid:
+                                logger.debug(f"Rejected detection for gallery: {reason}")
+                                continue  # Skip this track, don't add to gallery
+                        
                         if x2 > x1 and y2 > y1 and quality_scorer:
                              crop = frame_data.frame[y1:y2, x1:x2]
+                             
+                             # Phase 2: Person presence validation
+                             if settings.reid_enable_presence_check:
+                                 is_person_present, presence_reason = tracking_service.validate_person_presence(crop)
+                                 if not is_person_present:
+                                     logger.debug(f"Rejected empty/invalid crop: {presence_reason}")
+                                     continue  # Skip, no valid person in crop
                              
                              # Assess Quality
                              # Use simple crop scoring.

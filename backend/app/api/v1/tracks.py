@@ -28,6 +28,7 @@ router = APIRouter()
 
 # In-memory storage (replace with database in production)
 from app.services.track_store import get_track_store
+from app.services.gallery_store import get_gallery_store
 
 router = APIRouter()
 
@@ -176,10 +177,15 @@ async def search_by_image(
                  # Update track_data with correct camera_sequence before creating response
                  track_data["camera_sequence"] = camera_seq
                  
+                 # Get thumbnail from gallery store
+                 gallery_store = get_gallery_store()
+                 thumbnail = gallery_store.get_thumbnail(global_id)
+
                  results.append({
                      "track": GlobalTrackResponse(**track_data),
                      "score": float(score),
-                     "path_points": path_points
+                     "path_points": path_points,
+                     "thumbnail": thumbnail
                  })
                  
         return results

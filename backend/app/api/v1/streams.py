@@ -290,7 +290,7 @@ async def remove_source(source_id: int):
 async def play():
     """Start or resume playback."""
     manager = get_stream_manager()
-    manager.play()
+    await manager.play()
     return {"state": manager.state.value}
 
 

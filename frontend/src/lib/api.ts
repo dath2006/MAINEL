@@ -31,7 +31,7 @@ export interface StreamSource {
 }
 
 export interface PlaybackStatus {
-  state: 'stopped' | 'playing' | 'paused';
+  state: 'stopped' | 'playing' | 'paused' | 'loading';
   source_count: number;
   target_fps: number;
   queue_size: number;
@@ -72,6 +72,7 @@ export interface SearchResult {
   path_points: TrackPathPoint[];
   camera_sequence?: CameraSequenceItem[];
   transitions?: Transition[];
+  thumbnail?: string;
 }
 
 export interface SystemHealth {

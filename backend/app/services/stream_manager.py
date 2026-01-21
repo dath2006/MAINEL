@@ -34,6 +34,7 @@ class PlaybackState(str, Enum):
     STOPPED = "stopped"
     PLAYING = "playing"
     PAUSED = "paused"
+    LOADING = "loading"
 
 
 @dataclass
@@ -352,7 +353,7 @@ class StreamManager:
         """Get source by ID."""
         return self._sources.get(source_id)
     
-    def play(self):
+    async def play(self):
         """Start or resume playback of all sources."""
         
         if self._state == PlaybackState.PAUSED:
@@ -366,7 +367,9 @@ class StreamManager:
             self._stop_event.clear()
             self._pause_event.set()
         
-        self._state = PlaybackState.PLAYING
+        # Set Loading State
+        self._state = PlaybackState.LOADING
+        logger.info("Starting playback (LOADING)...")
         
         # Start reader threads for each source (including newly added ones)
         for source_id, source in self._sources.items():
@@ -380,6 +383,18 @@ class StreamManager:
                 self._threads[source_id] = thread
                 thread.start()
         
+        # Wait for sources to be ready (up to 10 seconds)
+        # We check if at least one source is ready if we have sources
+        if self._sources:
+            for _ in range(100):  # 10 seconds
+                ready_count = sum(1 for s in self._sources.values() if s.is_active)
+                if ready_count == len(self._sources):
+                    break
+                await asyncio.sleep(0.1)
+                
+            logger.info(f"Sources ready: {sum(1 for s in self._sources.values() if s.is_active)}/{len(self._sources)}")
+        
+        self._state = PlaybackState.PLAYING
         logger.info(f"Playback active with {len(self._sources)} sources")
     
     def pause(self):

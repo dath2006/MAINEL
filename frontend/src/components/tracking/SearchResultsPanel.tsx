@@ -230,11 +230,24 @@ export default function SearchResultsPanel({
                              </div>
                         </div>
 
-                        {/* Additional Metadata Placeholder */}
-                         <div className="p-4 border border-dashed border-[#27272a] rounded text-center">
-                            <User className="w-8 h-8 text-[#27272a] mx-auto mb-2" />
-                            <p className="text-[10px] text-[#52525b] uppercase tracking-widest">Re-ID Feature Attributes Unavailable</p>
-                        </div>
+                        {/* Person Thumbnail or Placeholder */}
+                        {selectedResult.thumbnail ? (
+                            <div className="relative aspect-[3/4] bg-[#18181b] border border-[#27272a] rounded-sm overflow-hidden group">
+                                <img 
+                                    src={`data:image/jpeg;base64,${selectedResult.thumbnail}`} 
+                                    alt={`ID ${selectedResult.track.id}`}
+                                    className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
+                                />
+                                <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end p-3">
+                                    <p className="text-[10px] text-white font-mono uppercase tracking-widest">Global Identity Capture</p>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="p-4 border border-dashed border-[#27272a] rounded text-center">
+                                <User className="w-8 h-8 text-[#27272a] mx-auto mb-2" />
+                                <p className="text-[10px] text-[#52525b] uppercase tracking-widest">Re-ID Feature Attributes Unavailable</p>
+                            </div>
+                        )}
                     </div>
                 )}
 

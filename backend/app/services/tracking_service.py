@@ -348,6 +348,109 @@ class TrackingService:
         
         return active_tracks, new_features
     
+    def validate_detection_quality(
+        self,
+        bbox: np.ndarray,
+        confidence: float,
+        frame_shape: Tuple[int, int],
+    ) -> Tuple[bool, str]:
+        """
+        Validate detection meets minimum quality standards for gallery.
+        
+        Filters out:
+        - Distant/small detections (insufficient detail for ReID)
+        - Invalid aspect ratios (non-person shapes like helmets)
+        - Tiny detections relative to frame
+        - Low confidence detections
+        
+        Args:
+            bbox: Bounding box as [x1, y1, x2, y2]
+            confidence: Detection confidence score
+            frame_shape: Frame dimensions (height, width)
+            
+        Returns:
+            (is_valid, rejection_reason)
+        """
+        x1, y1, x2, y2 = bbox
+        width = x2 - x1
+        height = y2 - y1
+        
+        # 1. Minimum size check (ReID training standard: 64x128)
+        if width < settings.reid_min_bbox_width or height < settings.reid_min_bbox_height:
+            return False, f"too_small:{width:.0f}x{height:.0f}"
+        
+        # 2. Aspect ratio check (person-like shape)
+        aspect_ratio = height / width if width > 0 else 0
+        
+        if not (settings.reid_min_aspect_ratio <= aspect_ratio <= settings.reid_max_aspect_ratio):
+            return False, f"bad_aspect:{aspect_ratio:.2f}"
+        
+        # 3. Frame coverage check (reject tiny detections)
+        frame_h, frame_w = frame_shape
+        coverage = (width * height) / (frame_w * frame_h)
+        
+        if coverage < settings.reid_min_frame_coverage:
+            return False, f"tiny_coverage:{coverage*100:.2f}%"
+        
+        # 4. Confidence check
+        if confidence < settings.reid_min_detection_confidence:
+            return False, f"low_conf:{confidence:.2f}"
+        
+        return True, "OK"
+    
+    def validate_person_presence(
+        self,
+        crop: np.ndarray,
+    ) -> Tuple[bool, str]:
+        """
+        Validate that crop actually contains a person (not empty background).
+        
+        Uses three checks:
+        1. Pixel variance: Empty backgrounds have uniform pixels
+        2. Edge density: Persons have edges, backgrounds don't
+        3. Color entropy: Persons have varied colors
+        
+        Args:
+            crop: Image crop as numpy array (H, W, C)
+            
+        Returns:
+            (is_valid, rejection_reason)
+        """
+        import cv2
+        
+        if crop is None or crop.size == 0:
+            return False, "empty_crop"
+        
+        h, w = crop.shape[:2]
+        if h < 10 or w < 10:
+            return False, "crop_too_small"
+        
+        # 1. Check pixel variance (empty backgrounds are uniform)
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if len(crop.shape) == 3 else crop
+        variance = float(gray.var())
+        
+        if variance < settings.reid_min_crop_variance:
+            return False, f"low_variance:{variance:.1f}"
+        
+        # 2. Check edge density (persons have many edges)
+        edges = cv2.Canny(gray, 50, 150)
+        edge_density = float(edges.sum()) / (edges.size * 255)  # Normalize
+        
+        if edge_density < settings.reid_min_edge_density:
+            return False, f"low_edges:{edge_density:.3f}"
+        
+        # 3. Check color entropy (persons have varied colors)
+        if len(crop.shape) == 3:
+            hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+            hist = cv2.calcHist([hsv], [0], None, [16], [0, 180])
+            hist = hist.flatten() / (hist.sum() + 1e-10)
+            entropy = float(-np.sum(hist * np.log2(hist + 1e-10)))
+            
+            if entropy < settings.reid_min_color_entropy:
+                return False, f"low_entropy:{entropy:.2f}"
+        
+        return True, "OK"
+    
     def detect_occlusions(self, tracks: List[Track]) -> Dict[int, List[int]]:
         """
         Detect which tracks are occluded and by whom.
