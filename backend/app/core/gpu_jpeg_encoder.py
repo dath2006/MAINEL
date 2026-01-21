@@ -1,31 +1,24 @@
 """
 GPU-Accelerated JPEG Encoder
 
-Uses NVIDIA nvJPEG for hardware-accelerated JPEG encoding via pynvjpeg.
-Falls back to CPU (cv2.imencode) if GPU encoding is unavailable.
+Uses TorchVision for hardware-accelerated JPEG encoding.
+Falls back to CPU (cv2.imencode) if GPU encoding is unavailable or fails.
 """
 
 import threading
 from typing import Optional
 import numpy as np
 import cv2
+import torch
+import torchvision.io
 from loguru import logger
-
-# Try to import pynvjpeg for GPU acceleration
-try:
-    from nvjpeg import NvJpeg
-    HAS_NVJPEG = True
-except ImportError:
-    HAS_NVJPEG = False
-    logger.warning("pynvjpeg not available - using CPU JPEG encoding")
-
 
 class GPUJpegEncoder:
     """
     Thread-safe GPU JPEG encoder with automatic CPU fallback.
     
-    Uses NVIDIA nvJPEG for hardware-accelerated encoding when available,
-    otherwise falls back to cv2.imencode.
+    Uses TorchVision for encoding. Accepts OpenCV BGR images, converts to 
+    PyTorch tensors (RGB, CHW), and encodes.
     """
     
     def __init__(self, quality: int = 50, use_gpu: bool = True):
@@ -37,39 +30,19 @@ class GPUJpegEncoder:
             use_gpu: Whether to attempt GPU encoding (will fallback to CPU if unavailable)
         """
         self.quality = quality
-        self._use_gpu = use_gpu and HAS_NVJPEG
-        self._encoder: Optional[NvJpeg] = None
+        self._use_gpu = use_gpu and torch.cuda.is_available()
         self._lock = threading.Lock()
-        self._initialized = False
-        self._gpu_available = False
         
         # Stats for monitoring
         self._encode_count = 0
         self._gpu_encode_count = 0
         self._cpu_fallback_count = 0
-    
-    def _ensure_initialized(self) -> bool:
-        """Lazily initialize the GPU encoder."""
-        if self._initialized:
-            return self._gpu_available
         
-        with self._lock:
-            # Double-check after acquiring lock
-            if self._initialized:
-                return self._gpu_available
-            
-            if self._use_gpu:
-                try:
-                    self._encoder = NvJpeg()
-                    self._gpu_available = True
-                    logger.info("GPU JPEG encoder initialized (nvJPEG)")
-                except Exception as e:
-                    logger.warning(f"Failed to initialize GPU JPEG encoder: {e}")
-                    self._gpu_available = False
-            
-            self._initialized = True
-            return self._gpu_available
-    
+        if self._use_gpu:
+            logger.info(f"GPU JPEG encoder initialized (TorchVision). GPU: {torch.cuda.get_device_name(0)}")
+        else:
+            logger.warning("GPU not available for JPEG encoding - using CPU fallback")
+
     def encode(self, frame: np.ndarray) -> bytes:
         """
         Encode a frame to JPEG bytes.
@@ -83,14 +56,33 @@ class GPUJpegEncoder:
         self._encode_count += 1
         
         # Try GPU encoding first
-        if self._ensure_initialized() and self._encoder is not None:
+        if self._use_gpu:
             try:
-                # nvJPEG expects BGR format (same as OpenCV)
-                jpeg_bytes = self._encoder.encode(frame, self.quality)
+                # 1. Convert Numpy (BGR, HWC) to Tensor (CHW) on GPU
+                # We can optimize this transfer
+                # copy=True to ensure we don't have issues if the numpy array is not writeable or strided oddly
+                tensor = torch.from_numpy(frame).to(device='cuda', non_blocking=True)
+                
+                # 2. Permute HWC -> CHW
+                tensor = tensor.permute(2, 0, 1)
+                
+                # 3. Convert BGR -> RGB (Swap channels 0 and 2)
+                tensor = tensor[[2, 1, 0], :, :]
+                
+                # 4. Encode
+                # torchvision.io.encode_jpeg supports CUDA tensors if nvJPEG is linked
+                encoded_tensor = torchvision.io.encode_jpeg(tensor, quality=self.quality)
+                
+                # 5. Move back to CPU and convert to bytes
+                jpeg_bytes = encoded_tensor.cpu().numpy().tobytes()
+                
                 self._gpu_encode_count += 1
                 return jpeg_bytes
+                
             except Exception as e:
                 # GPU encoding failed, fall back to CPU
+                # This could happen if nvJPEG is not available in the PyTorch build
+                # or if OOM occurs
                 logger.debug(f"GPU JPEG encode failed, using CPU fallback: {e}")
                 self._cpu_fallback_count += 1
         
@@ -109,7 +101,7 @@ class GPUJpegEncoder:
             "total_encodes": self._encode_count,
             "gpu_encodes": self._gpu_encode_count,
             "cpu_fallbacks": self._cpu_fallback_count,
-            "gpu_available": self._gpu_available,
+            "gpu_available": self._use_gpu,
             "gpu_usage_pct": (
                 self._gpu_encode_count / self._encode_count * 100
                 if self._encode_count > 0 else 0
@@ -157,3 +149,4 @@ def encode_frame_to_jpeg(frame: np.ndarray, quality: int = 50) -> bytes:
     """
     encoder = get_gpu_encoder(quality)
     return encoder.encode(frame)
+

@@ -17,6 +17,7 @@ WORKDIR /app
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     python3.11 \
+    python3.11-dev \
     python3.11-venv \
     python3-pip \
     libgl1-mesa-glx \
@@ -37,7 +38,8 @@ RUN python -m pip install --upgrade pip
 
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir numpy==2.2.6 && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY app/ app/
