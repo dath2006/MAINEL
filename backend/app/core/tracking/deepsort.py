@@ -25,6 +25,24 @@ class TrackState(Enum):
     DELETED = 3      # Track marked for deletion
 
 
+class CrossCameraTrackState(Enum):
+    """Cross-camera lifecycle states for occlusion awareness."""
+    TENTATIVE = 1      # New, needs confirmation
+    CONFIRMED = 2      # Strong multi-camera evidence
+    OCCLUDED = 3       # Currently occluded by another person
+    MISSING = 4        # Lost, searching across cameras
+    DELETED = 5        # Permanently removed
+
+
+@dataclass
+class OcclusionInfo:
+    """Tracks occlusion events for ID correction."""
+    occluding_track_ids: List[int] = field(default_factory=list)
+    occlusion_start_time: Optional[float] = None  # Frame number
+    pre_occlusion_embedding: Optional[np.ndarray] = None
+    occlusion_count: int = 0
+
+
 @dataclass
 class Track:
     """
@@ -50,6 +68,13 @@ class Track:
     class_name: str = "unknown"
     confidence: float = 0.0
     global_id: Optional[str] = None  # Global Re-ID across cameras
+    
+    # Cross-camera state tracking (Phase 1 enhancement)
+    cross_camera_state: CrossCameraTrackState = CrossCameraTrackState.TENTATIVE
+    occlusion_info: OcclusionInfo = field(default_factory=OcclusionInfo)
+    last_high_quality_embedding: Optional[np.ndarray] = None
+    quality_history: List[float] = field(default_factory=list)
+    views_confirmed: set = field(default_factory=set)  # Camera IDs where confirmed
     
     def to_xyah(self) -> np.ndarray:
         """Get current position in (x, y, a, h) format."""
@@ -112,7 +137,38 @@ class Track:
         elif self.time_since_update > self.max_age:
             self.state = TrackState.DELETED
     
+    def update_occlusion_state(
+        self,
+        is_occluded: bool,
+        occluding_ids: List[int],
+        current_frame: int,
+    ):
+        """
+        Update occlusion state and store pre-occlusion embedding.
+        
+        Args:
+            is_occluded: Whether this track is currently occluded
+            occluding_ids: List of track IDs that are occluding this track
+            current_frame: Current frame number
+        """
+        if is_occluded and self.cross_camera_state != CrossCameraTrackState.OCCLUDED:
+            # Entering occlusion
+            self.cross_camera_state = CrossCameraTrackState.OCCLUDED
+            self.occlusion_info.occlusion_start_time = current_frame
+            self.occlusion_info.occluding_track_ids = occluding_ids
+            self.occlusion_info.occlusion_count += 1
+            
+            # Store last high-quality embedding before occlusion
+            if self.last_high_quality_embedding is not None:
+                self.occlusion_info.pre_occlusion_embedding = self.last_high_quality_embedding.copy()
+                
+        elif not is_occluded and self.cross_camera_state == CrossCameraTrackState.OCCLUDED:
+            # Exiting occlusion - flag for verification
+            self.cross_camera_state = CrossCameraTrackState.CONFIRMED
+            # Keep occlusion_info for post-verification (don't clear yet)
+    
     def is_tentative(self) -> bool:
+
         return self.state == TrackState.TENTATIVE
     
     def is_confirmed(self) -> bool:

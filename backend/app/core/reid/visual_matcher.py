@@ -79,18 +79,42 @@ class VisualMatcher:
         embedding: np.ndarray,
         camera_id: int,
         timestamp: Optional[datetime] = None,
-    ):
+        quality_score: Optional[float] = None,
+        bbox_confidence: Optional[float] = None,
+        occlusion_rate: Optional[float] = None,
+    ) -> bool:
         """
-        Add or update identity in gallery.
+        Add or update identity in gallery with quality gating.
         
         Args:
             global_id: Unique identity ID
             embedding: Feature embedding
             camera_id: Current camera
             timestamp: Observation time
+            quality_score: Overall quality score (0-1)
+            bbox_confidence: Detection confidence (0-1)
+            occlusion_rate: Occlusion level (0-1, 0=no occlusion)
+            
+        Returns:
+            True if embedding was added, False if rejected
         """
         if timestamp is None:
             timestamp = datetime.utcnow()
+        
+        # Quality gating (Phase 1 enhancement)
+        from app.config import settings
+        
+        if quality_score is not None and quality_score < settings.reid_quality_threshold:
+            logger.debug(f"Rejected low-quality feature: quality={quality_score:.3f} < {settings.reid_quality_threshold}")
+            return False
+        
+        if bbox_confidence is not None and bbox_confidence < settings.reid_bbox_confidence_threshold:
+            logger.debug(f"Rejected low-confidence feature: conf={bbox_confidence:.3f}")
+            return False
+        
+        if occlusion_rate is not None and occlusion_rate > 0.3:
+            logger.debug(f"Rejected occluded feature: occlusion_rate={occlusion_rate:.3f}")
+            return False
         
         # Normalize embedding
         norm = np.linalg.norm(embedding)
@@ -99,11 +123,28 @@ class VisualMatcher:
         
         if global_id in self.gallery:
             entry = self.gallery[global_id]
+            
+            # Diversity constraint: avoid redundant embeddings (Phase 1 enhancement)
+            if entry.embeddings_history:
+                similarities = [
+                    float(np.dot(embedding, hist_emb))
+                    for hist_emb in entry.embeddings_history
+                ]
+                max_sim = max(similarities)
+                
+                if max_sim > settings.reid_diversity_threshold:
+                    logger.debug(
+                        f"Rejected redundant embedding for {global_id[:8]}: "
+                        f"max_sim={max_sim:.3f} > {settings.reid_diversity_threshold}"
+                    )
+                    return False
+            
             entry.embeddings_history.append(embedding)
             
-            # Keep only recent embeddings
-            if len(entry.embeddings_history) > self.embedding_history_size:
-                entry.embeddings_history = entry.embeddings_history[-self.embedding_history_size:]
+            # Keep only recent embeddings (increased to 50 in Phase 1)
+            max_size = settings.reid_feature_bank_size  # 50
+            if len(entry.embeddings_history) > max_size:
+                entry.embeddings_history = entry.embeddings_history[-max_size:]
             
             # Update average embedding
             entry.embedding = np.mean(entry.embeddings_history, axis=0)
@@ -150,6 +191,7 @@ class VisualMatcher:
             )
         
         logger.debug(f"Gallery updated: {global_id} (size={len(self.gallery)})")
+        return True  # Successfully added
     
     def _evict_oldest(self):
         """Remove oldest entry from gallery."""

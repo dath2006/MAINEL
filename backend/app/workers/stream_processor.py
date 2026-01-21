@@ -24,7 +24,9 @@ from app.services.identity_merger import get_identity_merger
 from app.api.v1.realtime import broadcast_event
 from app.schemas.track import TrackStatus
 from app.services.gallery_store import get_gallery_store
+from app.services.gallery_store import get_gallery_store
 from app.config import settings
+from app.core.gpu_jpeg_encoder import get_gpu_encoder
 
 # Function to get scorer (lazy load to avoid heavy imports at root if needed)
 _quality_scorer = None
@@ -261,7 +263,7 @@ class StreamProcessor:
             
             # 2. Run ReID matching for confirmed tracks (Smart Filtered)
             if reid_service:
-                logger.info(f"ReID: Processing {len(tracks)} tracks")
+                # logger.info(f"ReID: Processing {len(tracks)} tracks")
                 quality_scorer = get_quality_scorer_instance()
                 
                 for track in tracks:
@@ -350,7 +352,7 @@ class StreamProcessor:
                                      timestamp=frame_data.timestamp,
                                      embedding=feature  # Cache embedding for fast search
                                  )
-                                 logger.debug(f"Added capture to gallery for {track.global_id} (Q={quality_score:.2f})")
+                                #  logger.debug(f"Added capture to gallery for {track.global_id} (Q={quality_score:.2f})")
                                  
                                  # Periodic identity merge check
                                  if frame_data.frame_number - self._last_merge_frame >= self._merge_check_interval:
@@ -471,11 +473,14 @@ class StreamProcessor:
                 )
             
             # Encode frame as JPEG
-            # Use lower quality to save bandwidth/memory if needed
-            encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), self.frame_quality]
-            _, buffer = cv2.imencode('.jpg', frame, encode_params)
-            
-            frame_b64 = base64.b64encode(buffer).decode('utf-8')
+            # Uses GPU acceleration if available, falls back to CPU
+            try:
+                frame_b64 = get_gpu_encoder(self.frame_quality).encode(frame)
+                # Convert bytes to base64 string
+                frame_b64 = base64.b64encode(frame_b64).decode('utf-8')
+            except Exception as e:
+                logger.error(f"Encoding failed: {e}")
+                return
             
             # Broadcast
             event = {

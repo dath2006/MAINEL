@@ -284,6 +284,105 @@ class ReIDService:
         for tid in expired:
             del self._recent_tracklets[tid]
     
+    async def verify_post_occlusion(
+        self,
+        track_id: str,
+        current_embedding: np.ndarray,
+        pre_occlusion_embedding: np.ndarray,
+        occluder_global_ids: List[str],
+        timestamp: datetime,
+    ) -> Optional[str]:
+        """
+        Verify track identity after occlusion ends.
+        
+        Compares current appearance to:
+        1. Pre-occlusion self (should match)
+        2. Occluders' feature banks (may match if IDs swapped)
+        
+        Args:
+            track_id: Current global track ID
+            current_embedding: Current appearance features
+            pre_occlusion_embedding: Appearance before occlusion
+            occluder_global_ids: Global IDs of occluding tracks
+            timestamp: Current time
+            
+        Returns:
+            Corrected global_id if swap detected, else None
+        """
+        # Normalize embeddings
+        current_norm = current_embedding / np.linalg.norm(current_embedding)
+        pre_norm = pre_occlusion_embedding / np.linalg.norm(pre_occlusion_embedding)
+        
+        # Compare to self (pre-occlusion)
+        self_similarity = float(np.dot(current_norm, pre_norm))
+        
+        # Compare to each occluder's feature bank
+        best_match = None
+        best_sim = self_similarity
+        
+        for occluder_id in occluder_global_ids:
+            if occluder_id not in self.visual_matcher.gallery:
+                continue
+                
+            entry = self.visual_matcher.gallery[occluder_id]
+            
+            # Compute MAX similarity against occluder's feature bank
+            occluder_similarities = [
+                float(np.dot(current_norm, hist_emb / np.linalg.norm(hist_emb)))
+                for hist_emb in entry.embeddings_history
+                if hist_emb is not None
+            ]
+            
+            if not occluder_similarities:
+                continue
+                
+            occluder_sim = max(occluder_similarities)
+            
+            # If current appearance matches occluder BETTER than self
+            if occluder_sim > best_sim and occluder_sim > settings.reid_post_occlusion_similarity_threshold:
+                best_sim = occluder_sim
+                best_match = occluder_id
+        
+        if best_match:
+            logger.warning(
+                f"🔄 ID CORRECTION DETECTED: Track {track_id[:8]} better matches "
+                f"{best_match[:8]} after occlusion (sim={best_sim:.3f} vs self={self_similarity:.3f})"
+            )
+            return best_match
+        
+        return None
+    
+    async def perform_id_swap(
+        self,
+        track_a_id: str,
+        track_b_id: str,
+        timestamp: datetime,
+    ):
+        """
+        Swap two identities in the gallery.
+        
+        Used when post-occlusion verification detects ID confusion.
+        
+        Args:
+            track_a_id: First global track ID
+            track_b_id: Second global track ID
+            timestamp: Time of swap
+        """
+        gallery_a = self.visual_matcher.gallery.get(track_a_id)
+        gallery_b = self.visual_matcher.gallery.get(track_b_id)
+        
+        if not gallery_a or not gallery_b:
+            logger.error(f"Cannot swap IDs: one or both not in gallery")
+            return
+        
+        # Swap gallery entries
+        self.visual_matcher.gallery[track_a_id] = gallery_b
+        self.visual_matcher.gallery[track_b_id] = gallery_a
+        
+        logger.info(
+            f"✅ ID SWAP COMPLETED: {track_a_id[:8]} ↔ {track_b_id[:8]} at {timestamp}"
+        )
+    
     def search_by_image(
         self,
         image_bytes: bytes,

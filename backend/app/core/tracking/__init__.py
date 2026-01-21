@@ -4,6 +4,8 @@ from app.core.tracking.kalman import KalmanFilter
 from app.core.tracking.deepsort import (
     Track,
     TrackState,
+    CrossCameraTrackState,
+    OcclusionInfo,
     DeepSORTTracker,
     NearestNeighborDistanceMetric,
 )
@@ -13,6 +15,8 @@ __all__ = [
     "KalmanFilter",
     "Track",
     "TrackState",
+    "CrossCameraTrackState",
+    "OcclusionInfo",
     "DeepSORTTracker",
     "NearestNeighborDistanceMetric",
     "BaseTracker",

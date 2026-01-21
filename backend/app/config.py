@@ -156,6 +156,71 @@ class Settings(BaseSettings):
         description="GPU memory limit for ONNX Runtime in GB"
     )
     
+    # ReID Enhancement Settings - Phase 1
+    # Quality Gating
+    reid_quality_threshold: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description="Minimum quality score to add feature to bank"
+    )
+    reid_diversity_threshold: float = Field(
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        description="Maximum similarity to existing features (diversity constraint)"
+    )
+    reid_feature_bank_size: int = Field(
+        default=50,
+        ge=10,
+        le=200,
+        description="Maximum embeddings to store per identity (increased from 10)"
+    )
+    reid_bbox_confidence_threshold: float = Field(
+        default=0.8,
+        ge=0.0,
+        le=1.0,
+        description="Minimum bbox confidence for feature quality"
+    )
+    
+    # Occlusion Detection & Handling
+    reid_occlusion_iou_threshold: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="IoU threshold to consider track occluded"
+    )
+    reid_enable_occlusion_detection: bool = Field(
+        default=True,
+        description="Enable occlusion state tracking"
+    )
+    reid_enable_id_correction: bool = Field(
+        default=True,
+        description="Enable post-occlusion ID verification and correction"
+    )
+    reid_post_occlusion_similarity_threshold: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Minimum similarity for ID swap detection"
+    )
+    
+    # Quality Scoring Weights
+    reid_blur_weight: float = Field(default=0.3, ge=0.0, le=1.0)
+    reid_occlusion_weight: float = Field(default=0.4, ge=0.0, le=1.0)
+    reid_illumination_weight: float = Field(default=0.2, ge=0.0, le=1.0)
+    reid_confidence_weight: float = Field(default=0.1, ge=0.0, le=1.0)
+    
+    # Blur Detection Thresholds (Laplacian variance)
+    reid_min_blur_variance: float = Field(
+        default=50.0,
+        description="Laplacian variance below this is considered blurry"
+    )
+    reid_max_blur_variance: float = Field(
+        default=100.0,
+        description="Laplacian variance above this is very sharp"
+    )
+    
     # Gallery & Search Settings
     search_threshold: float = Field(
         default=0.5,

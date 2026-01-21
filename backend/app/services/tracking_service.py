@@ -11,8 +11,9 @@ import numpy as np
 from loguru import logger
 
 from app.schemas.track import Detection, BoundingBox
-from app.core.tracking import DeepSORTTracker, Track, TrackState
+from app.core.tracking import DeepSORTTracker, Track, TrackState, CrossCameraTrackState
 from app.core.features import NvidiaReIDExtractor
+from app.core.reid import QualityScorer
 from app.config import settings
 
 # Import PeopleNet Detector
@@ -59,11 +60,24 @@ class TrackingService:
         # Per-camera state
         self.camera_states: Dict[int, CameraState] = {}
         
+        # Quality scorer for feature assessment
+        self.quality_scorer = QualityScorer(
+            blur_weight=settings.reid_blur_weight,
+            occlusion_weight=settings.reid_occlusion_weight,
+            illumination_weight=settings.reid_illumination_weight,
+            confidence_weight=settings.reid_confidence_weight,
+            min_blur_variance=settings.reid_min_blur_variance,
+            max_blur_variance=settings.reid_max_blur_variance,
+        )
+        
         # Track lifecycle callbacks (for ReID service integration)
         self._on_tracklet_start: List[callable] = []
         self._on_tracklet_end: List[callable] = []
         
-        logger.info("TrackingService initialized")
+        # Frame counter for occlusion tracking
+        self.frame_counter: Dict[int, int] = {}  # camera_id -> frame_number
+        
+        logger.info("TrackingService initialized with QualityScorer")
     
     def _get_detector(self) -> object:
         """Lazy load detector (PeopleNet)."""
@@ -140,7 +154,7 @@ class TrackingService:
              person_dets = [d for d in raw_all if d.get('class_name') == 'person' and d.get('confidence', 0) >= 0.4]
              face_dets = [d for d in raw_all if d.get('class_name') == 'face' and d.get('confidence', 0) >= 0.3]
              
-             logger.info(f"PeopleNet detected {len(person_dets)} persons, {len(face_dets)} faces (raw: {len(raw_all)})")
+            #  logger.info(f"PeopleNet detected {len(person_dets)} persons, {len(face_dets)} faces (raw: {len(raw_all)})")
              
              # Debug: Log class breakdown from raw detections
              if len(raw_all) > 0:
@@ -194,27 +208,51 @@ class TrackingService:
         else:
              raise ImportError("Unknown detector type or detector missing detect method.")
         
-        # 2. Feature extraction (if enabled)
+        # 2. Feature extraction with quality assessment (if enabled)
         features = None
+        quality_scores = []
+        crops = []
+        all_bboxes = []
+        
         if extract_features and len(detections) > 0:
             extractor = self._get_extractor()
+            
+            # Prepare all bboxes for occlusion assessment
+            for det in detections:
+                all_bboxes.append(np.array([det.x1, det.y1, det.x2, det.y2]))
+            
             # Crop detections
             if hasattr(detector, 'crop_detections'):
                  crops = detector.crop_detections(frame, detections)
             else:
-                 # Manually crop if detector doesn't support it (PeopleNetDetector doesn't have crop_detections taking Detection objs)
+                 # Manually crop if detector doesn't support it
                  h, w = frame.shape[:2]
-                 crops = []
                  for det in detections:
                      x1, y1, x2, y2 = int(det.x1), int(det.y1), int(det.x2), int(det.y2)
                      x1, y1 = max(0, x1), max(0, y1)
                      x2, y2 = min(w, x2), min(h, y2)
                      if x2 > x1 and y2 > y1:
                          crops.append(frame[y1:y2, x1:x2])
+                     else:
+                         crops.append(None)  # Invalid crop
             
-            if crops:
-                # Extract body features
-                features = extractor.extract_batch(crops)
+            # Assess quality for each crop
+            for i, (crop, det, bbox) in enumerate(zip(crops, detections, all_bboxes)):
+                if crop is not None and crop.size > 0:
+                    quality_score = self.quality_scorer.compute_quality_score(
+                        crop=crop,
+                        bbox=bbox,
+                        all_bboxes=all_bboxes,
+                        confidence=det.bbox.confidence,
+                    )
+                    quality_scores.append(quality_score)
+                else:
+                    quality_scores.append(0.0)
+            
+            # Extract features only from valid crops
+            valid_crops = [c for c in crops if c is not None and c.size > 0]
+            if valid_crops:
+                features = extractor.extract_batch(valid_crops)
         
         # 3. Predict and update tracker
         state.tracker.predict()
@@ -264,6 +302,43 @@ class TrackingService:
             if best_face:
                 logger.info(f"Track {track.track_id}: Associated face_bbox={best_face} (score={best_score:.3f})")
         
+        # 3c. Detect occlusions and update track states
+        if settings.reid_enable_occlusion_detection:
+            # Increment frame counter
+            if camera_id not in self.frame_counter:
+                self.frame_counter[camera_id] = 0
+            self.frame_counter[camera_id] += 1
+            current_frame = self.frame_counter[camera_id]
+            
+            # Detect occlusions
+            occlusions = self.detect_occlusions(active_tracks)
+            
+            # Update each track's occlusion state and quality
+            for idx, track in enumerate(active_tracks):
+                if not track.is_confirmed():
+                    continue
+                
+                # Update occlusion state
+                is_occluded = track.track_id in occlusions
+                occluding_ids = occlusions.get(track.track_id, [])
+                track.update_occlusion_state(is_occluded, occluding_ids, current_frame)
+                
+                # Store high-quality embeddings
+                if features is not None and idx < len(quality_scores) and idx < len(features):
+                    quality = quality_scores[idx]
+                    track.quality_history.append(quality)
+                    
+                    # Keep only recent quality scores
+                    if len(track.quality_history) > 50:
+                        track.quality_history = track.quality_history[-50:]
+                    
+                    # Update last high-quality embedding
+                    if quality >= settings.reid_quality_threshold:
+                        track.last_high_quality_embedding = features[idx].copy()
+                        logger.debug(
+                            f"Track {track.track_id}: Stored high-quality embedding (quality={quality:.3f})"
+                        )
+        
         # 4. Handle track lifecycle
         new_features = await self._handle_track_events(
             state, active_tracks, timestamp
@@ -272,6 +347,81 @@ class TrackingService:
         state.last_frame_time = timestamp
         
         return active_tracks, new_features
+    
+    def detect_occlusions(self, tracks: List[Track]) -> Dict[int, List[int]]:
+        """
+        Detect which tracks are occluded and by whom.
+        
+        Uses IoU-based analysis: if two tracks overlap significantly,
+        the one with the smaller bbox is considered occluded.
+        
+        Args:
+            tracks: List of active tracks
+            
+        Returns:
+            Dict mapping track_id -> list of occluding track_ids
+        """
+        occlusions = {}
+        
+        for i, track_i in enumerate(tracks):
+            if not track_i.is_confirmed():
+                continue
+                
+            bbox_i = track_i.to_tlbr()
+            
+            for j, track_j in enumerate(tracks):
+                if i == j or not track_j.is_confirmed():
+                    continue
+                    
+                bbox_j = track_j.to_tlbr()
+                
+                # Compute IoU
+                iou = self._compute_iou(bbox_i, bbox_j)
+                
+                if iou > settings.reid_occlusion_iou_threshold:
+                    # Determine which is in front (larger bbox = closer to camera)
+                    area_i = (bbox_i[2] - bbox_i[0]) * (bbox_i[3] - bbox_i[1])
+                    area_j = (bbox_j[2] - bbox_j[0]) * (bbox_j[3] - bbox_j[1])
+                    
+                    if area_i > area_j:
+                        # track_i is occluding track_j
+                        occlusions.setdefault(track_j.track_id, []).append(track_i.track_id)
+                    else:
+                        # track_j is occluding track_i
+                        occlusions.setdefault(track_i.track_id, []).append(track_j.track_id)
+        
+        return occlusions
+    
+    def _compute_iou(self, bbox1: np.ndarray, bbox2: np.ndarray) -> float:
+        """
+        Compute Intersection over Union between two bounding boxes.
+        
+        Args:
+            bbox1: First bbox as [x1, y1, x2, y2]
+            bbox2: Second bbox as [x1, y1, x2, y2]
+            
+        Returns:
+            IoU value (0.0-1.0)
+        """
+        # Intersection coordinates
+        x1 = max(bbox1[0], bbox2[0])
+        y1 = max(bbox1[1], bbox2[1])
+        x2 = min(bbox1[2], bbox2[2])
+        y2 = min(bbox1[3], bbox2[3])
+        
+        # Intersection area
+        inter_area = max(0, x2 - x1) * max(0, y2 - y1)
+        
+        # Union area
+        bbox1_area = (bbox1[2] - bbox1[0]) * (bbox1[3] - bbox1[1])
+        bbox2_area = (bbox2[2] - bbox2[0]) * (bbox2[3] - bbox2[1])
+        union_area = bbox1_area + bbox2_area - inter_area
+        
+        # IoU
+        if union_area == 0:
+            return 0.0
+        
+        return inter_area / union_area
     
     def extract_from_image(self, image: np.ndarray) -> Optional[np.ndarray]:
         """

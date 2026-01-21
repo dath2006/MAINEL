@@ -108,8 +108,8 @@ class PeopleNetDetector:
         self.input_name = self.session.get_inputs()[0].name
         self.output_names = [o.name for o in self.session.get_outputs()]
         
-        print(f"[PeopleNet] Input name: {self.input_name}")
-        print(f"[PeopleNet] Output names: {self.output_names}")
+        # print(f"[PeopleNet] Input name: {self.input_name}")
+        # print(f"[PeopleNet] Output names: {self.output_names}")
     
     def preprocess(self, image: np.ndarray) -> Tuple[np.ndarray, int, int]:
         """
@@ -167,15 +167,15 @@ class PeopleNetDetector:
         output_bbox = None
         
         # Log output shapes for debugging
-        print(f"[PeopleNet] Model output shapes: {[o.shape for o in outputs]}")
+        # print(f"[PeopleNet] Model output shapes: {[o.shape for o in outputs]}")
         
         for output in outputs:
             if output.shape[1] == len(self.CLASSES):  # Coverage has num_classes channels
                 output_cov = output
-                print(f"[PeopleNet] Coverage tensor shape: {output.shape} (classes={len(self.CLASSES)})")
+                # print(f"[PeopleNet] Coverage tensor shape: {output.shape} (classes={len(self.CLASSES)})")
             elif output.shape[1] == len(self.CLASSES) * 4:  # Bbox has num_classes*4 channels
                 output_bbox = output
-                print(f"[PeopleNet] BBox tensor shape: {output.shape} (classes*4={len(self.CLASSES)*4})")
+                # print(f"[PeopleNet] BBox tensor shape: {output.shape} (classes*4={len(self.CLASSES)*4})")
         
         if output_cov is None or output_bbox is None:
             raise ValueError(f"Unexpected output shapes: {[o.shape for o in outputs]}")
@@ -362,24 +362,24 @@ class PeopleNetDetector:
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         
-        print(f"\n[PeopleNet] Processing video: {source_name}")
-        print(f"[PeopleNet] Resolution: {width}x{height}, FPS: {fps}")
-        if total_frames > 0:
-            print(f"[PeopleNet] Total frames: {total_frames}")
+        # print(f"\n[PeopleNet] Processing video: {source_name}")
+        # print(f"[PeopleNet] Resolution: {width}x{height}, FPS: {fps}")
+        # if total_frames > 0:
+        #     print(f"[PeopleNet] Total frames: {total_frames}")
         
         # Initialize video writer if output path specified
         writer = None
         if output_path:
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-            print(f"[PeopleNet] Saving output to: {output_path}")
+            # print(f"[PeopleNet] Saving output to: {output_path}")
         
         frame_count = 0
         fps_display = 0
         fps_update_time = time.time()
         frame_times = []
         
-        print("[PeopleNet] Press 'q' to quit, 'p' to pause")
+        # print("[PeopleNet] Press 'q' to quit, 'p' to pause")
         
         try:
             paused = False
@@ -387,11 +387,11 @@ class PeopleNetDetector:
                 if not paused:
                     ret, frame = cap.read()
                     if not ret:
-                        print("\n[PeopleNet] End of video stream")
+                        # print("\n[PeopleNet] End of video stream")
                         break
                     
                     if max_frames and frame_count >= max_frames:
-                        print(f"\n[PeopleNet] Reached max frames: {max_frames}")
+                        # print(f"\n[PeopleNet] Reached max frames: {max_frames}")
                         break
                     
                     # Measure inference time
@@ -458,12 +458,12 @@ class PeopleNetDetector:
         # Print summary
         if frame_times:
             avg_inference = sum(frame_times) / len(frame_times)
-            print(f"\n[PeopleNet] Summary:")
-            print(f"  - Processed frames: {frame_count}")
-            print(f"  - Average inference time: {avg_inference:.1f}ms")
-            print(f"  - Average FPS: {1000.0/avg_inference:.1f}")
-            if output_path:
-                print(f"  - Output saved to: {output_path}")
+            # print(f"\n[PeopleNet] Summary:")
+            # print(f"  - Processed frames: {frame_count}")
+            # print(f"  - Average inference time: {avg_inference:.1f}ms")
+            # print(f"  - Average FPS: {1000.0/avg_inference:.1f}")
+            # if output_path:
+            #     print(f"  - Output saved to: {output_path}")
 
 
 def main():
@@ -530,8 +530,8 @@ Examples:
         if image is None:
             raise IOError(f"Cannot read image: {args.input}")
         
-        print(f"\n[PeopleNet] Processing image: {args.input}")
-        print(f"[PeopleNet] Image size: {image.shape[1]}x{image.shape[0]}")
+        # print(f"\n[PeopleNet] Processing image: {args.input}")
+        # print(f"[PeopleNet] Image size: {image.shape[1]}x{image.shape[0]}")
         
         # Detect
         detections = detector.detect(image, classes=classes)
@@ -547,10 +547,10 @@ Examples:
         # Save or display
         if args.output:
             cv2.imwrite(args.output, result)
-            print(f"[PeopleNet] Output saved to: {args.output}")
+            # print(f"[PeopleNet] Output saved to: {args.output}")
         else:
             cv2.imshow('PeopleNet Detection', result)
-            print("[PeopleNet] Press any key to close...")
+            # print("[PeopleNet] Press any key to close...")
             cv2.waitKey(0)
             cv2.destroyAllWindows()
 

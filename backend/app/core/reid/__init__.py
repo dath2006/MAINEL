@@ -15,6 +15,8 @@ from app.core.reid.topology import (
     CameraNode,
     TopologyEdge,
 )
+from app.core.reid.quality_scorer import QualityScorer
+
 
 __all__ = [
     "VisualMatcher",
@@ -26,4 +28,6 @@ __all__ = [
     "CameraTopology",
     "CameraNode",
     "TopologyEdge",
+    "QualityScorer",
 ]
+
