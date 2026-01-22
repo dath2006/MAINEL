@@ -19,6 +19,7 @@ from loguru import logger
 from sqlalchemy import select
 from app.db.session import get_db_context
 from app.db.models import Camera
+from app.config import settings
 
 
 class SourceType(str, Enum):
@@ -475,6 +476,7 @@ class StreamManager:
         logger.info(f"Source {source.id} reader running: {source.width}x{source.height} @ {source.fps:.1f}fps")
         
         frame_count = 0
+        skip_interval = settings.frame_skip_interval
         consecutive_errors = 0
         MAX_ERRORS = 50  # Stop after 50 consecutive read errors
         
@@ -551,6 +553,11 @@ class StreamManager:
             # Reset error count on success
             consecutive_errors = 0
             frame_count += 1
+            
+            # Frame skipping for FPS optimization
+            if skip_interval > 1 and (frame_count % skip_interval) != 0:
+                continue  # Skip this frame, don't queue it
+            
             source.current_frame = frame_count
             
             # Create frame data

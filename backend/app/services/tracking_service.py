@@ -102,6 +102,46 @@ class TrackingService:
             logger.info(f"Created camera state for camera {camera_id}")
         return self.camera_states[camera_id]
     
+    def _filter_detections(self, detections: List[Detection]) -> List[Detection]:
+        """
+        Filter out low-quality and false-positive detections.
+        
+        Filters applied:
+        1. Minimum size - rejects far-away/blurry detections
+        2. Aspect ratio - rejects helmet-like square/wide detections
+        """
+        if not detections:
+            return detections
+        
+        filtered = []
+        min_h = settings.min_detection_height
+        min_w = settings.min_detection_width
+        min_ar = settings.min_detection_aspect_ratio
+        max_ar = settings.max_detection_aspect_ratio
+        
+        for det in detections:
+            width = det.bbox.width
+            height = det.bbox.height
+            
+            # Size filter - reject far-away/small detections
+            if width < min_w or height < min_h:
+                logger.debug(f"Rejected detection: too small ({width:.0f}x{height:.0f})")
+                continue
+            
+            # Aspect ratio filter (height/width) - reject helmet-like shapes
+            aspect_ratio = height / width if width > 0 else 0
+            if aspect_ratio < min_ar or aspect_ratio > max_ar:
+                logger.debug(f"Rejected detection: bad aspect ratio ({aspect_ratio:.2f})")
+                continue
+            
+            filtered.append(det)
+        
+        rejected_count = len(detections) - len(filtered)
+        if rejected_count > 0:
+            logger.info(f"Filtered {rejected_count}/{len(detections)} detections (size/aspect ratio)")
+        
+        return filtered
+    
     async def process_frame(
         self,
         camera_id: int,
@@ -193,6 +233,9 @@ class TrackingService:
                   ))
         else:
              raise ImportError("Unknown detector type or detector missing detect method.")
+        
+        # 1b. Filter detections (size, aspect ratio)
+        detections = self._filter_detections(detections)
         
         # 2. Feature extraction (if enabled)
         features = None

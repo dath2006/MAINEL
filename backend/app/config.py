@@ -170,6 +170,33 @@ class Settings(BaseSettings):
         description="Minimum quality score (0-100) to save captures to gallery"
     )
     
+    # Detection Filtering Settings
+    min_detection_height: int = Field(
+        default=65,
+        description="Minimum bounding box height in pixels to accept detection (filters far-away people)"
+    )
+    min_detection_width: int = Field(
+        default=30,
+        description="Minimum bounding box width in pixels to accept detection"
+    )
+    min_detection_aspect_ratio: float = Field(
+        default=1.0,
+        ge=0.5,
+        le=5.0,
+        description="Minimum height/width ratio - persons are tall, helmets are wide/square"
+    )
+    max_detection_aspect_ratio: float = Field(
+        default=5.0,
+        description="Maximum height/width ratio to filter out false tall detections"
+    )
+    
+    # Frame Skipping Settings
+    frame_skip_interval: int = Field(
+        default=1,
+        ge=1,
+        description="Process every Nth frame (1=no skip, 2=skip every other frame, etc.)"
+    )
+    
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
